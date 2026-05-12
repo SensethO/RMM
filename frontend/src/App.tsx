@@ -1,51 +1,62 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useEffect } from 'react';
 import { useMsalAuthentication } from '@azure/msal-react';
-
-// Pages - TODO: Create these components
-// import Dashboard from './pages/Dashboard';
-// import Devices from './pages/Devices';
-// import DeviceDetail from './pages/DeviceDetail';
-// import Apps from './pages/Apps';
-// import Deployments from './pages/Deployments';
-// import Alerts from './pages/Alerts';
+import { useApiClient } from './hooks/useApi';
+import Layout from './components/Layout';
+import Dashboard from './pages/Dashboard';
+import Devices from './pages/Devices';
+import Commands from './pages/Commands';
+import Alerts from './pages/Alerts';
 
 function App() {
-  const { isLoading, isAuthenticated, error } = useMsalAuthentication('redirect');
+  const { isLoading, isAuthenticated } = useMsalAuthentication('redirect');
+  const { isReady } = useApiClient();
 
   if (isLoading) {
-    return <div className="flex items-center justify-center h-screen">Loading...</div>;
-  }
-
-  if (error) {
-    return <div className="flex items-center justify-center h-screen text-red-600">Authentication Error</div>;
+    return (
+      <div className="flex items-center justify-center h-screen bg-gray-100">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <p className="text-gray-600">Loading...</p>
+        </div>
+      </div>
+    );
   }
 
   if (!isAuthenticated) {
-    return <Navigate to="/login" />;
+    return (
+      <div className="flex items-center justify-center h-screen bg-gradient-to-br from-blue-600 to-blue-800">
+        <div className="text-center">
+          <h1 className="text-4xl font-bold text-white mb-4">RMM Platform</h1>
+          <p className="text-blue-200 mb-8">Remote Monitoring & Management System</p>
+          <p className="text-blue-200">Please login to continue...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isReady) {
+    return (
+      <div className="flex items-center justify-center h-screen bg-gray-100">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <p className="text-gray-600">Initializing API...</p>
+        </div>
+      </div>
+    );
   }
 
   return (
     <BrowserRouter>
-      <div className="h-screen flex flex-col">
-        {/* Header */}
-        <header className="bg-blue-600 text-white p-4">
-          <h1 className="text-2xl font-bold">RMM Dashboard</h1>
-        </header>
-
-        {/* Main Content */}
-        <main className="flex-1 overflow-auto">
-          <Routes>
-            <Route path="/" element={<div>Dashboard - Coming Soon</div>} />
-            <Route path="/devices" element={<div>Devices - Coming Soon</div>} />
-            <Route path="/devices/:id" element={<div>Device Detail - Coming Soon</div>} />
-            <Route path="/apps" element={<div>Apps - Coming Soon</div>} />
-            <Route path="/deployments" element={<div>Deployments - Coming Soon</div>} />
-            <Route path="/alerts" element={<div>Alerts - Coming Soon</div>} />
-            <Route path="*" element={<Navigate to="/" />} />
-          </Routes>
-        </main>
-      </div>
+      <Layout>
+        <Routes>
+          <Route path="/" element={<Dashboard />} />
+          <Route path="/devices" element={<Devices />} />
+          <Route path="/commands" element={<Commands />} />
+          <Route path="/alerts" element={<Alerts />} />
+          <Route path="*" element={<Navigate to="/" />} />
+        </Routes>
+      </Layout>
     </BrowserRouter>
   );
 }
