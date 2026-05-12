@@ -16,7 +16,7 @@ app.use(cors({
 app.use(express.json());
 
 // Health check
-app.get('/api/health', (req: Request, res: Response) => {
+app.get('/api/health', (_req: Request, res: Response) => {
   res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
@@ -30,7 +30,7 @@ app.get('/api/health', (req: Request, res: Response) => {
 
 // Error handling middleware (place last)
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-app.use((err: unknown, req: Request, res: Response, next: NextFunction) => {
+app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
   const error = err instanceof Error ? err : new Error(String(err));
   logger.error('Unhandled error:', error);
   res.status(500).json({

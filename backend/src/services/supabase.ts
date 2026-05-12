@@ -27,7 +27,7 @@ export function getSupabaseClient(): SupabaseClient {
 export async function testConnection(): Promise<boolean> {
   try {
     const client = getSupabaseClient();
-    const { count, error } = await client
+    const { error } = await client
       .from('tenants')
       .select('*', { count: 'exact', head: true });
 
