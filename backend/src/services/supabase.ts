@@ -27,7 +27,9 @@ export function getSupabaseClient(): SupabaseClient {
 export async function testConnection(): Promise<boolean> {
   try {
     const client = getSupabaseClient();
-    const { data, error } = await client.from('tenants').select('COUNT(*)', { count: 'exact', head: true });
+    const { count, error } = await client
+      .from('tenants')
+      .select('*', { count: 'exact', head: true });
 
     if (error) {
       logger.error('Supabase connection test failed:', error);
@@ -47,22 +49,23 @@ export async function testConnection(): Promise<boolean> {
 export async function queryWithTenant(
   table: string,
   tenantId: string,
-  options: any = {}
+  options: { limit?: number; offset?: number } = {}
 ) {
   const client = getSupabaseClient();
+  const limit = options.limit || 100;
+  const offset = options.offset || 0;
 
   return client
     .from(table)
-    .select(options.select || '*')
+    .select('*')
     .eq('tenant_id', tenantId)
-    .limit(options.limit || 100)
-    .offset(options.offset || 0);
+    .range(offset, offset + limit - 1);
 }
 
 export async function insertWithTenant(
   table: string,
   tenantId: string,
-  data: any
+  data: Record<string, unknown>
 ) {
   const client = getSupabaseClient();
 
@@ -76,7 +79,7 @@ export async function updateWithTenant(
   table: string,
   tenantId: string,
   id: string,
-  data: any
+  data: Record<string, unknown>
 ) {
   const client = getSupabaseClient();
 

@@ -1,4 +1,4 @@
-import express, { Express, Request, Response } from 'express';
+import express, { Express, Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { logger } from './utils/logger';
@@ -29,11 +29,12 @@ app.get('/api/health', (req: Request, res: Response) => {
 // TODO: Add routes (devices, commands, apps, deployments, alerts)
 
 // Error handling middleware (place last)
-app.use((err: any, req: Request, res: Response) => {
-  logger.error('Unhandled error:', err);
-  res.status(err.status || 500).json({
-    error: err.message || 'Internal server error',
-    requestId: req.id,
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+app.use((err: unknown, req: Request, res: Response, next: NextFunction) => {
+  const error = err instanceof Error ? err : new Error(String(err));
+  logger.error('Unhandled error:', error);
+  res.status(500).json({
+    error: error.message || 'Internal server error',
   });
 });
 
