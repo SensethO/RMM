@@ -1,0 +1,43 @@
+# Supabase Configuration
+
+[project]
+project_id = "your-project-id"
+account_id = "your-account-id"
+
+[api]
+enabled = true
+max_body_size = 20
+
+[db]
+major_version = 15
+
+[studio]
+enabled = true
+
+[auth]
+enable_signup = true
+enable_anonymous_signups = false
+jwt_expiry = 3600
+jwt_secret = "your-jwt-secret"
+
+[realtime]
+enabled = true
+max_bytes_per_second = 0
+max_channels_per_client = 128
+max_joins_per_second = 500
+max_presence_bytes_per_client = 4096
+max_push_bytes = 16384
+max_event_batch_size = 16
+timeout_ms = 5000
+
+[storage]
+file_size_limit = 52428800
+s3_host = "s3.amazonaws.com"
+s3_protocol = "https"
+s3_access_key = ""
+s3_secret_key = ""
+s3_region = "us-east-1"
+s3_bucket = ""
+
+[vector]
+enabled = false

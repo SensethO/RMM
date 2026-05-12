@@ -1,0 +1,20 @@
+{
+  "buildCommand": "npm run build --prefix backend && npm run build --prefix frontend",
+  "outputDirectory": "frontend/dist",
+  "framework": "vite",
+  "regions": ["cdg1"],
+  "env": {
+    "SUPABASE_URL": "@supabase_url",
+    "SUPABASE_ANON_KEY": "@supabase_anon_key",
+    "SUPABASE_SERVICE_KEY": "@supabase_service_key",
+    "AZURE_TENANT_ID": "@azure_tenant_id",
+    "AZURE_CLIENT_ID": "@azure_client_id",
+    "AZURE_CLIENT_SECRET": "@azure_client_secret",
+    "JWT_SECRET": "@jwt_secret"
+  },
+  "functions": {
+    "api/**/*.ts": {
+      "runtime": "nodejs18.x"
+    }
+  }
+}

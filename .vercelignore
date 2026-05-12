@@ -1,0 +1,20 @@
+# Vercel Build Ignore List
+.git
+.gitignore
+README.md
+ARCHITECTURE.md
+CLAUDE.md
+docker-compose.yml
+node_modules
+.env.example
+.env.local
+.env.*.local
+logs/
+coverage/
+dist/
+build/
+.vscode/
+.idea/
+*.log
+supabase/
+db/
