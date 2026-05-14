@@ -118,9 +118,10 @@ async function tenantMiddleware(req: Request, res: Response, next: NextFunction)
       .single();
 
     if (error || !tenant) {
-      // For demo-tenant, create a virtual tenant context without DB lookup
+      // For demo JWT tokens (no tid/tenant_id claim), use the seeded demo tenant
+      const DEMO_TENANT_ID = 'a0000000-dead-beef-0000-000000000001';
       if (tenantId === 'demo-tenant') {
-        req.tenant = { id: 'demo-tenant', office365_tenant_id: undefined, name: 'Demo Tenant', subscription_tier: 'demo' };
+        req.tenant = { id: DEMO_TENANT_ID, office365_tenant_id: undefined, name: 'Demo Tenant', subscription_tier: 'demo' };
         next();
         return;
       }
@@ -291,6 +292,39 @@ commandsRouter.get('/:device_id/history', async (req: Request, res: Response) =>
 });
 
 app.use('/api/commands', commandsRouter);
+
+// ─── Alerts routes ────────────────────────────────────────────────────────────
+app.get('/api/alerts', async (req: Request, res: Response) => {
+  try {
+    if (!req.tenant) { res.status(401).json({ error: 'Missing tenant context' }); return; }
+    const limit = parseInt(req.query.limit as string) || 50;
+    const supabase = getSupabase();
+    const { data: alerts, error } = await supabase
+      .from('alerts')
+      .select('*')
+      .eq('tenant_id', req.tenant.id)
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    if (error) { logger.error('Get alerts:', error); res.status(500).json({ error: 'Failed to fetch alerts' }); return; }
+    res.json({ data: alerts || [], count: (alerts || []).length, statusCode: 200 });
+  } catch (err) { logger.error('Alerts error:', err); res.status(500).json({ error: 'Internal server error' }); }
+});
+
+app.patch('/api/alerts/:id/acknowledge', async (req: Request, res: Response) => {
+  try {
+    if (!req.tenant) { res.status(401).json({ error: 'Missing tenant context' }); return; }
+    const supabase = getSupabase();
+    const { data: alert, error } = await supabase
+      .from('alerts')
+      .update({ acknowledged: true, updated_at: new Date().toISOString() })
+      .eq('tenant_id', req.tenant.id)
+      .eq('id', req.params.id)
+      .select()
+      .single();
+    if (error || !alert) { res.status(404).json({ error: 'Alert not found' }); return; }
+    res.json({ data: alert, statusCode: 200 });
+  } catch (err) { logger.error('Acknowledge alert error:', err); res.status(500).json({ error: 'Internal server error' }); }
+});
 
 // ─── 404 & Error handlers ─────────────────────────────────────────────────────
 app.use((_req, res) => res.status(404).json({ error: 'Endpoint not found', statusCode: 404 }));
