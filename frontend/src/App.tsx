@@ -8,6 +8,7 @@ import Devices from './pages/Devices';
 import Commands from './pages/Commands';
 import Alerts from './pages/Alerts';
 import Settings from './pages/Settings';
+import DeviceDetail from './pages/DeviceDetail';
 
 function App() {
   const { isReady } = useApiClient();
@@ -63,6 +64,7 @@ function App() {
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/devices" element={<Devices />} />
+          <Route path="/devices/:id" element={<DeviceDetail />} />
           <Route path="/commands" element={<Commands />} />
           <Route path="/alerts" element={<Alerts />} />
           <Route path="/settings" element={<Settings />} />
