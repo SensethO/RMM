@@ -10,6 +10,14 @@ export function useApiClient() {
   const [isReady, setIsReady] = useState(false);
 
   useEffect(() => {
+    // Check for manual auth token first (bypasses MSAL entirely)
+    const manualToken = localStorage.getItem('auth_token');
+    if (manualToken) {
+      initializeApiClient(async () => manualToken);
+      setIsReady(true);
+      return;
+    }
+
     if (accounts.length === 0) return;
 
     const getMsalToken = async (): Promise<string> => {

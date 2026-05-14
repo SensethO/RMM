@@ -45,9 +45,9 @@ export function Login() {
       localStorage.setItem('auth_token', token);
       console.log('✅ Token stored in localStorage');
 
-      // Redirect to dashboard
+      // Redirect to dashboard - use hard reload so App.tsx re-reads localStorage
       console.log('🚀 Redirecting to dashboard...');
-      navigate('/');
+      window.location.href = '/';
     } catch (err) {
       const errorMessage = 'Login failed. Please try again.';
       setError(errorMessage);
