@@ -294,6 +294,69 @@ function executeCommand(type, params) {
     case 'disk_cleanup':
       return `Disk cleanup simulé. Espace libre C: actuellement ${getDiskPercent()}% utilisé.`;
 
+    case 'list_dir': {
+      const fs   = require('fs');
+      const path = require('path');
+      const dir  = params.path || 'C:\\';
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      const result = entries.slice(0, 200).map(e => {
+        let size = 0, modified = '';
+        try {
+          const stat = fs.statSync(path.join(dir, e.name));
+          size     = stat.size;
+          modified = stat.mtime.toISOString().substring(0, 16).replace('T', ' ');
+        } catch {}
+        return {
+          name:     e.name,
+          type:     e.isDirectory() ? 'dir' : 'file',
+          size,
+          modified,
+        };
+      });
+      // Sort: dirs first, then files
+      result.sort((a, b) => {
+        if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      });
+      return JSON.stringify({ path: dir, entries: result, total: entries.length }, null, 2);
+    }
+
+    case 'read_file': {
+      const fs   = require('fs');
+      const filePath = params.path;
+      if (!filePath) throw new Error('Missing path param');
+      const stat = fs.statSync(filePath);
+      if (stat.size > 512 * 1024) throw new Error(`Fichier trop grand (${Math.round(stat.size/1024)}KB). Max 512KB.`);
+      return fs.readFileSync(filePath, 'utf8');
+    }
+
+    case 'disk_info': {
+      // All drives usage via wmic
+      try {
+        const out = execSync('wmic logicaldisk get Caption,FreeSpace,Size,VolumeName /value', { encoding: 'utf8', timeout: 5000 });
+        const drives = [];
+        const blocks = out.split('\r\n\r\n').filter(b => b.includes('Caption='));
+        for (const block of blocks) {
+          const caption    = (block.match(/Caption=(.+)/)     || [])[1]?.trim();
+          const free       = parseInt((block.match(/FreeSpace=(\d+)/)  || [])[1] || '0');
+          const size       = parseInt((block.match(/Size=(\d+)/)       || [])[1] || '0');
+          const volumeName = (block.match(/VolumeName=(.*)/) || [])[1]?.trim() || '';
+          if (caption && size > 0) {
+            drives.push({
+              drive:      caption,
+              label:      volumeName,
+              total_gb:   +(size / 1024**3).toFixed(1),
+              free_gb:    +(free / 1024**3).toFixed(1),
+              used_pct:   Math.round((size - free) / size * 100),
+            });
+          }
+        }
+        return JSON.stringify(drives, null, 2);
+      } catch (e) {
+        return `Erreur disk_info: ${e.message}`;
+      }
+    }
+
     default:
       return `Commande "${type}" reçue avec params: ${JSON.stringify(params)}`;
   }
