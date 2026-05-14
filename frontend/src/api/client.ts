@@ -137,6 +137,14 @@ export const commandAPI = {
     ),
 };
 
+// Alerts API
+export const alertAPI = {
+  list: (limit = 50) =>
+    getApiClient().get<ApiResponse<Record<string, unknown>[]>>('/api/alerts', { params: { limit } }),
+  acknowledge: (alertId: string) =>
+    getApiClient().patch<ApiResponse<Record<string, unknown>>>(`/api/alerts/${alertId}/acknowledge`),
+};
+
 // Health check
 export const health = {
   check: () => getApiClient().get<ApiResponse<Record<string, unknown>>>('/api/health'),
