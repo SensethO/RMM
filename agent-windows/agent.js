@@ -5,7 +5,7 @@
  * Usage: node agent.js
  */
 
-const AGENT_VERSION = '1.1.2';
+const AGENT_VERSION = '1.1.3';
 const AGENT_RAW_URL = 'https://raw.githubusercontent.com/SensethO/RMM/master/agent-windows/agent.js';
 
 const https = require('https');
@@ -102,7 +102,7 @@ function getRamPercent() {
   return Math.round(((total - free) / total) * 100);
 }
 
-// ─── Public IP ──────────────────────────────────────────────────�����────────────
+// ─── Public IP ──────────────────────────────────────────────────�������────────────
 function fetchPublicIp() {
   return new Promise((resolve) => {
     https.get('https://api.ipify.org?format=json', (res) => {
@@ -170,7 +170,7 @@ function getDeviceId() {
   return `WIN-${hostname.toUpperCase()}-${mac}`.substring(0, 50);
 }
 
-// ─── Fetch config from backend ─────────────────────────���─���────────────────────
+// ─── Fetch config from backend ───────────────────────���─���─���────────────────────
 async function fetchConfig(silent = false) {
   try {
     const res = await request('GET', `/api/devices/${deviceDbId}/config`, null);
@@ -573,15 +573,30 @@ async function executeCommand(type, params) {
 
       // Écrire la nouvelle version
       fs.writeFileSync(selfPath, content, 'utf8');
-      // Lancer la nouvelle version en arrière-plan puis quitter
-      const { exec } = require('child_process');
-      exec(`start "" /b "${process.execPath}" "${selfPath}"`, { shell: 'cmd.exe' }, (err) => {
-        if (err) {
-          const { spawn } = require('child_process');
-          spawn(process.execPath, [selfPath], { detached: true, stdio: 'ignore' }).unref();
-        }
-      });
-      setTimeout(() => process.exit(0), 1500);
+
+      // Écrire un .bat de relance dans le même dossier — survit à la sortie du process
+      // même en contexte tâche planifiée / SYSTEM
+      const dir     = path.dirname(selfPath);
+      const batPath = path.join(dir, 'rmm-restart.bat');
+      const nodeExe = process.execPath.replace(/\\/g, '\\\\');
+      const agentJs = selfPath.replace(/\\/g, '\\\\');
+      fs.writeFileSync(batPath, [
+        '@echo off',
+        'timeout /t 2 /nobreak >nul',
+        `start "" /b "${process.execPath}" "${selfPath}"`,
+        'del "%~f0"',   // supprime ce .bat après exécution
+      ].join('\r\n'), 'utf8');
+
+      // Lancer le .bat en arrière-plan (cmd.exe, détaché, sans fenêtre)
+      const { exec: execRestart, spawn: spawnRestart } = require('child_process');
+      execRestart(`start "" /b cmd.exe /c "${batPath}"`, { shell: 'cmd.exe' });
+      // Fallback : spawn direct si start échoue
+      setTimeout(() => {
+        try {
+          spawnRestart(process.execPath, [selfPath], { detached: true, stdio: 'ignore' }).unref();
+        } catch {}
+        process.exit(0);
+      }, 2000);
       return `✅ Mise à jour téléchargée (${content.length} octets). Redémarrage en cours...`;
     }
 
