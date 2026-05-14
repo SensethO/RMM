@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApiClient } from '../hooks/useApi';
 import { deviceAPI } from '../api/client';
+import { useSystemInfo, isAgentOutdated } from '../hooks/useSystemInfo';
 
 interface Device {
   id: string;
@@ -19,6 +20,7 @@ interface Device {
 export default function Devices() {
   const navigate = useNavigate();
   const { isReady } = useApiClient();
+  const { info: sysInfo } = useSystemInfo();
   const [devices, setDevices] = useState<Device[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -158,9 +160,15 @@ export default function Devices() {
                     </td>
                     <td className="px-6 py-4 text-sm">
                       {device.agent_version ? (
-                        <span className="inline-flex items-center gap-1 bg-green-100 text-green-700 text-xs font-mono px-2 py-1 rounded-full">
-                          v{device.agent_version}
-                        </span>
+                        isAgentOutdated(device.agent_version, sysInfo?.agent_version) ? (
+                          <span className="inline-flex items-center gap-1 bg-orange-100 text-orange-700 text-xs font-mono px-2 py-1 rounded-full" title={`Mise à jour disponible : v${sysInfo?.agent_version}`}>
+                            ⚠️ v{device.agent_version}
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 bg-green-100 text-green-700 text-xs font-mono px-2 py-1 rounded-full">
+                            ✓ v{device.agent_version}
+                          </span>
+                        )
                       ) : (
                         <span className="text-gray-300 text-xs">—</span>
                       )}

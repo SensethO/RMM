@@ -41,6 +41,18 @@ app.use((req, res, next) => {
 });
 
 // ─── Health ──────────────────────────────────────────────────────────────────
+// ─── Versions ────────────────────────────────────────────────────────────────
+const EXPECTED_AGENT_VERSION = '1.1.0';
+const APP_VERSION             = '1.1.0';
+
+app.get('/api/system/info', (_req, res) => {
+  res.json({
+    app_version:   APP_VERSION,
+    agent_version: EXPECTED_AGENT_VERSION,
+    build_date:    '2026-05-14',
+  });
+});
+
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString(), environment: process.env.NODE_ENV || 'development' });
 });
@@ -139,11 +151,11 @@ async function tenantMiddleware(req: Request, res: Response, next: NextFunction)
 
 // Apply auth + tenant to all /api/ routes (except /api/auth and /api/health)
 app.use('/api/', (req, res, next) => {
-  if (req.path.startsWith('/auth') || req.path === '/health') return next();
+  if (req.path.startsWith('/auth') || req.path === '/health' || req.path.startsWith('/system')) return next();
   authMiddleware(req, res, next);
 });
 app.use('/api/', (req, res, next) => {
-  if (req.path.startsWith('/auth') || req.path === '/health') return next();
+  if (req.path.startsWith('/auth') || req.path === '/health' || req.path.startsWith('/system')) return next();
   tenantMiddleware(req, res, next);
 });
 
