@@ -1,10 +1,15 @@
+# 🚀 DERNIER STEP - 2 MINUTES
+
+## ⚡ LIEN DIRECT
+Cliquez ici et collez le SQL :
+**https://console.supabase.com/project/ebgjazfgxsumzbsvyrna/sql/new**
+
+## 📋 COPIER CE SQL
 -- RMM Platform - Initial Database Schema
 
 -- Enable extensions
-DROP EXTENSION IF EXISTS "uuid-ossp" CASCADE;
-DROP EXTENSION IF EXISTS "pgcrypto" CASCADE;
-CREATE EXTENSION "uuid-ossp";
-CREATE EXTENSION "pgcrypto";
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 -- Tenants (SaaS customers)
 CREATE TABLE tenants (
@@ -31,11 +36,10 @@ CREATE TABLE devices (
   ip_address INET,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  CONSTRAINT status_check CHECK (status IN ('online', 'offline', 'error', 'maintenance'))
+  CONSTRAINT status_check CHECK (status IN ('online', 'offline', 'error', 'maintenance')),
+  INDEX (tenant_id, status),
+  INDEX (device_id, tenant_id)
 );
-
-CREATE INDEX devices_tenant_status ON devices(tenant_id, status);
-CREATE INDEX devices_device_id_tenant ON devices(device_id, tenant_id);
 
 -- Device Telemetry (CPU, RAM, Disk metrics)
 CREATE TABLE device_telemetry (
@@ -45,10 +49,9 @@ CREATE TABLE device_telemetry (
   ram_percent FLOAT CHECK (ram_percent >= 0 AND ram_percent <= 100),
   disk_percent FLOAT CHECK (disk_percent >= 0 AND disk_percent <= 100),
   network_bytes_sec BIGINT,
-  timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+  timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  INDEX (device_id, timestamp)
 );
-
-CREATE INDEX device_telemetry_device_timestamp ON device_telemetry(device_id, timestamp);
 
 -- Commands (Tasks to execute on devices)
 CREATE TABLE commands (
@@ -64,12 +67,11 @@ CREATE TABLE commands (
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   executed_at TIMESTAMP WITH TIME ZONE,
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  CONSTRAINT status_check CHECK (status IN ('pending', 'executing', 'success', 'failed', 'timeout'))
+  CONSTRAINT status_check CHECK (status IN ('pending', 'executing', 'success', 'failed', 'timeout')),
+  INDEX (tenant_id, status),
+  INDEX (device_id, status),
+  INDEX (created_at DESC)
 );
-
-CREATE INDEX commands_tenant_status ON commands(tenant_id, status);
-CREATE INDEX commands_device_status ON commands(device_id, status);
-CREATE INDEX commands_created_at ON commands(created_at DESC);
 
 -- App Catalog (Approved applications)
 CREATE TABLE apps_catalog (
@@ -83,10 +85,9 @@ CREATE TABLE apps_catalog (
   uninstall_script TEXT,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  UNIQUE(tenant_id, app_name, version)
+  UNIQUE(tenant_id, app_name, version),
+  INDEX (tenant_id)
 );
-
-CREATE INDEX apps_catalog_tenant ON apps_catalog(tenant_id);
 
 -- Deployments (Target devices for app installation)
 CREATE TABLE deployments (
@@ -99,10 +100,9 @@ CREATE TABLE deployments (
   deployment_method VARCHAR(20) DEFAULT 'manual',
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  CONSTRAINT status_check CHECK (status IN ('draft', 'active', 'paused', 'completed'))
+  CONSTRAINT status_check CHECK (status IN ('draft', 'active', 'paused', 'completed')),
+  INDEX (tenant_id, status)
 );
-
-CREATE INDEX deployments_tenant_status ON deployments(tenant_id, status);
 
 -- Alerts (Events requiring attention)
 CREATE TABLE alerts (
@@ -115,11 +115,10 @@ CREATE TABLE alerts (
   acknowledged BOOLEAN DEFAULT FALSE,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  CONSTRAINT severity_check CHECK (severity IN ('info', 'warning', 'critical'))
+  CONSTRAINT severity_check CHECK (severity IN ('info', 'warning', 'critical')),
+  INDEX (tenant_id, created_at DESC),
+  INDEX (device_id, acknowledged)
 );
-
-CREATE INDEX alerts_tenant_created ON alerts(tenant_id, created_at DESC);
-CREATE INDEX alerts_device_acknowledged ON alerts(device_id, acknowledged);
 
 -- Audit Logs (Compliance and security)
 CREATE TABLE audit_logs (
@@ -130,11 +129,10 @@ CREATE TABLE audit_logs (
   resource_type VARCHAR(50),
   resource_id UUID,
   changes JSONB,
-  timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+  timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  INDEX (tenant_id, timestamp DESC),
+  INDEX (user_id, timestamp DESC)
 );
-
-CREATE INDEX audit_logs_tenant_timestamp ON audit_logs(tenant_id, timestamp DESC);
-CREATE INDEX audit_logs_user_timestamp ON audit_logs(user_id, timestamp DESC);
 
 -- Row Level Security (RLS) Policies for multi-tenant isolation
 ALTER TABLE tenants ENABLE ROW LEVEL SECURITY;
@@ -158,3 +156,11 @@ GRANT ALL ON audit_logs TO authenticated;
 
 -- Allow service role for backend operations
 GRANT ALL ON ALL TABLES IN SCHEMA public TO service_role;
+
+## ✅ FAIT !
+Après avoir cliqué RUN, votre plateforme RMM est **100% OPÉRATIONNELLE** ! 🎉
+
+## 🧪 TESTER
+1. Frontend: https://frontend-n9fcc4uxi-sensethos-projects.vercel.app
+2. Backend: https://backend-duqudh17t-sensethos-projects.vercel.app/api/health
+

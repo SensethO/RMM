@@ -1,0 +1,10 @@
+node_modules
+.git
+.gitignore
+README.md
+.env
+.env.local
+.env.*.local
+.DS_Store
+src/__tests__
+dist
