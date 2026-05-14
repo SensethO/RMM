@@ -1,5 +1,51 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { deployAPI, deviceAPI, commandAPI, AppDeployParams } from '../api/client';
+
+// ─── Parser sortie winget list ────────────────────────────────────────────────
+interface InstalledApp { name: string; id: string; version: string; available: string; source: string; }
+
+function parseWingetOutput(raw: string): InstalledApp[] {
+  const lines = raw.split('\n');
+  // Trouver la ligne séparatrice (---...)
+  const sepIdx = lines.findIndex(l => /^[\-\s]+$/.test(l) && l.includes('---'));
+  if (sepIdx < 1) return [];
+  const sep = lines[sepIdx];
+  // Positions de début de chaque colonne
+  const cols: number[] = [];
+  let inDash = false;
+  for (let i = 0; i < sep.length; i++) {
+    if (sep[i] === '-' && !inDash) { cols.push(i); inDash = true; }
+    if (sep[i] === ' ' && inDash)  { inDash = false; }
+  }
+  const extract = (line: string, ci: number) => {
+    const start = cols[ci] ?? 0;
+    const end   = cols[ci + 1] ?? line.length;
+    return line.substring(start, end).trim();
+  };
+  return lines.slice(sepIdx + 1)
+    .filter(l => l.trim() && !/^[\-\s]+$/.test(l))
+    .map(l => ({
+      name:      extract(l, 0),
+      id:        extract(l, 1),
+      version:   extract(l, 2),
+      available: extract(l, 3),
+      source:    extract(l, 4),
+    }))
+    .filter(a => a.name || a.id);
+}
+
+function exportCSV(apps: InstalledApp[], deviceName: string) {
+  const header = 'Nom,ID winget,Version installée,Mise à jour disponible,Source';
+  const rows = apps.map(a =>
+    [a.name, a.id, a.version, a.available, a.source].map(v => `"${v.replace(/"/g, '""')}"`).join(',')
+  );
+  const csv = [header, ...rows].join('\n');
+  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' });
+  const url  = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url; link.download = `inventaire-${deviceName}-${new Date().toISOString().slice(0,10)}.csv`;
+  link.click(); URL.revokeObjectURL(url);
+}
 
 // ─── Catalogue d'applications ─────────────────────────────────────────────────
 interface CatalogApp {
@@ -91,7 +137,15 @@ export default function Deploy() {
   const [customUrl, setCustomUrl]       = useState('');
   const [customName, setCustomName]     = useState('');
   const [customArgs, setCustomArgs]     = useState('');
-  const [tab, setTab]                   = useState<'catalog' | 'url'>('catalog');
+  const [tab, setTab]                   = useState<'catalog' | 'url' | 'inventory'>('catalog');
+  // ── Inventaire ──
+  const [invDeviceId, setInvDeviceId]   = useState('');
+  const [invScanning, setInvScanning]   = useState(false);
+  const [invApps, setInvApps]           = useState<InstalledApp[] | null>(null);
+  const [invRaw, setInvRaw]             = useState('');
+  const [invSearch, setInvSearch]       = useState('');
+  const [invError, setInvError]         = useState('');
+  const pollRef                         = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Charger devices + historique
   const loadHistory = useCallback(async () => {
@@ -161,6 +215,61 @@ export default function Deploy() {
     } finally { setDeploying(false); }
   };
 
+  // ── Scanner un device : list_installed_apps + polling résultat ──────────────
+  const handleScan = useCallback(async () => {
+    if (!invDeviceId) return;
+    setInvScanning(true);
+    setInvApps(null);
+    setInvRaw('');
+    setInvError('');
+
+    // Envoyer la commande
+    const sentAt = Date.now();
+    try {
+      await commandAPI.queue(invDeviceId, { command_type: 'list_installed_apps', params: {} });
+    } catch {
+      setInvError('Impossible d\'envoyer la commande à cet appareil.');
+      setInvScanning(false);
+      return;
+    }
+
+    // Polling toutes les 2s, max 90s
+    let elapsed = 0;
+    if (pollRef.current) clearInterval(pollRef.current);
+    pollRef.current = setInterval(async () => {
+      elapsed += 2;
+      if (elapsed > 90) {
+        clearInterval(pollRef.current!);
+        setInvScanning(false);
+        setInvError('Timeout : l\'appareil n\'a pas répondu dans les 90 secondes.');
+        return;
+      }
+      try {
+        const res = await commandAPI.getHistory(invDeviceId, 20);
+        const cmds = (res.data.data as Record<string, unknown>[]) || [];
+        const found = cmds.find(c =>
+          c.command_type === 'list_installed_apps' &&
+          new Date(c.created_at as string).getTime() >= sentAt - 5000 &&
+          (c.status === 'success' || c.status === 'failed')
+        );
+        if (found) {
+          clearInterval(pollRef.current!);
+          setInvScanning(false);
+          if (found.status === 'failed') {
+            setInvError(`Échec : ${found.output || 'Erreur inconnue'}`);
+          } else {
+            const raw = (found.output as string) || '';
+            setInvRaw(raw);
+            setInvApps(parseWingetOutput(raw));
+          }
+        }
+      } catch {}
+    }, 2000);
+  }, [invDeviceId]);
+
+  // Nettoyage polling au démontage
+  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
+
   // Envoyer une commande check_app pour un déploiement de l'historique
   const handleVerify = async (h: DeployRecord) => {
     if (!h.params?.package_id) return;
@@ -182,15 +291,128 @@ export default function Deploy() {
 
       {/* Onglets */}
       <div className="bg-white rounded-xl shadow p-1 flex gap-1 w-fit">
-        {(['catalog', 'url'] as const).map(t => (
+        {([['catalog','📦 Catalogue'], ['url','🔗 URL personnalisée'], ['inventory','🗂 Inventaire']] as const).map(([t, label]) => (
           <button key={t} onClick={() => setTab(t)}
             className={`px-4 py-2 rounded-lg text-sm font-semibold transition ${tab === t ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}>
-            {t === 'catalog' ? '📦 Catalogue' : '🔗 URL personnalisée'}
+            {label}
           </button>
         ))}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+      {/* ── Onglet Inventaire (pleine largeur) ─────────────────────────── */}
+      {tab === 'inventory' && (
+        <div className="space-y-4">
+          {/* Sélecteur de machine */}
+          <div className="bg-white rounded-xl shadow p-5">
+            <h3 className="font-semibold text-gray-800 mb-3">Scanner les logiciels installés</h3>
+            <div className="flex flex-wrap gap-3 items-end">
+              <div className="flex-1 min-w-[200px]">
+                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Machine</label>
+                <select value={invDeviceId} onChange={e => { setInvDeviceId(e.target.value); setInvApps(null); setInvError(''); }}
+                  className="mt-1 w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">
+                  <option value="">— Choisir une machine —</option>
+                  {devices.filter(d => d.status === 'online').map(d => (
+                    <option key={d.id} value={d.id}>{d.device_name} ({d.os})</option>
+                  ))}
+                  {devices.filter(d => d.status !== 'online').length > 0 && (
+                    <optgroup label="Hors ligne">
+                      {devices.filter(d => d.status !== 'online').map(d => (
+                        <option key={d.id} value={d.id} disabled>{d.device_name} (hors ligne)</option>
+                      ))}
+                    </optgroup>
+                  )}
+                </select>
+              </div>
+              <button onClick={handleScan} disabled={!invDeviceId || invScanning}
+                className="px-5 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-semibold rounded-lg transition text-sm">
+                {invScanning ? (
+                  <span className="flex items-center gap-2"><span className="animate-spin">⚙️</span> Scan en cours...</span>
+                ) : '🔍 Scanner'}
+              </button>
+              {invApps && (
+                <button onClick={() => exportCSV(invApps, devices.find(d => d.id === invDeviceId)?.device_name || invDeviceId)}
+                  className="px-5 py-2 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-lg transition text-sm">
+                  ⬇ Export CSV
+                </button>
+              )}
+            </div>
+            {invScanning && (
+              <p className="mt-3 text-xs text-blue-500 animate-pulse">
+                ⏳ En attente de la réponse de l'agent (jusqu'à 90s selon le nombre de logiciels)...
+              </p>
+            )}
+            {invError && (
+              <div className="mt-3 bg-red-50 border border-red-200 rounded-lg p-3 text-xs text-red-700">{invError}</div>
+            )}
+          </div>
+
+          {/* Résultats */}
+          {invApps !== null && (
+            <div className="bg-white rounded-xl shadow">
+              <div className="px-5 py-4 border-b border-gray-100 flex flex-wrap items-center gap-3">
+                <div>
+                  <h3 className="font-semibold text-gray-800">
+                    {devices.find(d => d.id === invDeviceId)?.device_name} — {invApps.length} logiciels
+                  </h3>
+                  {invApps.some(a => a.available) && (
+                    <p className="text-xs text-orange-500 font-medium mt-0.5">
+                      ⬆ {invApps.filter(a => a.available).length} mise(s) à jour disponible(s)
+                    </p>
+                  )}
+                </div>
+                <input type="text" placeholder="Filtrer..." value={invSearch}
+                  onChange={e => setInvSearch(e.target.value)}
+                  className="ml-auto border rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 w-64" />
+              </div>
+
+              {invApps.length === 0 ? (
+                <div className="p-6 text-center text-gray-400 text-sm">
+                  <p>Aucun logiciel parsé.</p>
+                  <details className="mt-2 text-left">
+                    <summary className="cursor-pointer text-xs text-gray-400">Voir la sortie brute</summary>
+                    <pre className="mt-2 text-xs bg-gray-900 text-green-400 p-3 rounded overflow-auto max-h-48">{invRaw}</pre>
+                  </details>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wide border-b bg-gray-50">
+                        <th className="px-5 py-3">Nom</th>
+                        <th className="px-5 py-3">ID winget</th>
+                        <th className="px-5 py-3">Version installée</th>
+                        <th className="px-5 py-3">Mise à jour</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-50">
+                      {invApps
+                        .filter(a => !invSearch || a.name.toLowerCase().includes(invSearch.toLowerCase()) || a.id.toLowerCase().includes(invSearch.toLowerCase()))
+                        .map((a, i) => (
+                          <tr key={i} className={`hover:bg-gray-50 ${a.available ? 'bg-orange-50' : ''}`}>
+                            <td className="px-5 py-2.5 font-medium text-gray-900">{a.name || '—'}</td>
+                            <td className="px-5 py-2.5 text-gray-500 font-mono text-xs">{a.id || '—'}</td>
+                            <td className="px-5 py-2.5 text-gray-600">{a.version || '—'}</td>
+                            <td className="px-5 py-2.5">
+                              {a.available ? (
+                                <span className="text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full font-semibold">
+                                  ⬆ {a.available}
+                                </span>
+                              ) : (
+                                <span className="text-xs text-green-600">✓ à jour</span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className={`grid grid-cols-1 lg:grid-cols-3 gap-5 ${tab === 'inventory' ? 'hidden' : ''}`}>
 
         {/* ── Panneau gauche : catalogue ou URL ────────────────────────── */}
         <div className="lg:col-span-2 space-y-4">
@@ -349,7 +571,7 @@ export default function Deploy() {
       </div>
 
       {/* ── Historique des déploiements ────────────────────────────────── */}
-      <div className="bg-white rounded-xl shadow">
+      <div className={`bg-white rounded-xl shadow ${tab === 'inventory' ? 'hidden' : ''}`}>
         <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
           <h3 className="font-semibold text-gray-800">Historique des déploiements</h3>
           <button onClick={loadHistory} className="text-xs text-blue-600 hover:underline">↻ Actualiser</button>
