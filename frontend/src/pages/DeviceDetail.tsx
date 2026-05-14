@@ -14,6 +14,7 @@ interface Device {
   ip_address?: string;
   last_seen?: string;
   created_at: string;
+  agent_version?: string;
 }
 
 interface Telemetry {
@@ -145,6 +146,14 @@ export default function DeviceDetail() {
           <InfoRow label="User" value={device.user_id || '—'} />
           <InfoRow label="Last Seen" value={device.last_seen ? new Date(device.last_seen).toLocaleString() : 'Never'} />
           <InfoRow label="Registered" value={new Date(device.created_at).toLocaleString()} />
+          <InfoRow
+            label="Agent"
+            value={
+              device.agent_version
+                ? <span className="inline-flex items-center gap-1 bg-green-100 text-green-700 font-mono text-xs px-2 py-1 rounded-full">v{device.agent_version}</span>
+                : <span className="text-gray-400 text-xs">Non reporté</span>
+            }
+          />
           <div className="pt-2">
             <button
               onClick={() => navigate('/commands')}

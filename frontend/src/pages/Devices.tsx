@@ -13,6 +13,7 @@ interface Device {
   status: string;
   last_seen?: string;
   created_at: string;
+  agent_version?: string;
 }
 
 export default function Devices() {
@@ -121,6 +122,9 @@ export default function Devices() {
                     Last Seen
                   </th>
                   <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">
+                    Agent
+                  </th>
+                  <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">
                     Actions
                   </th>
                 </tr>
@@ -151,6 +155,15 @@ export default function Devices() {
                       {device.last_seen
                         ? new Date(device.last_seen).toLocaleDateString()
                         : 'Never'}
+                    </td>
+                    <td className="px-6 py-4 text-sm">
+                      {device.agent_version ? (
+                        <span className="inline-flex items-center gap-1 bg-green-100 text-green-700 text-xs font-mono px-2 py-1 rounded-full">
+                          v{device.agent_version}
+                        </span>
+                      ) : (
+                        <span className="text-gray-300 text-xs">—</span>
+                      )}
                     </td>
                     <td className="px-6 py-4 text-sm">
                       <button

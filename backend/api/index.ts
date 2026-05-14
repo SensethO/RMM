@@ -194,11 +194,13 @@ devicesRouter.get('/:id', async (req: Request, res: Response) => {
 devicesRouter.patch('/:id', async (req: Request, res: Response) => {
   try {
     if (!req.tenant) { res.status(401).json({ error: 'Missing tenant context' }); return; }
-    const { status, ip_address, last_seen } = req.body as { status?: string; ip_address?: string; last_seen?: string };
+    const { status, ip_address, last_seen, agent_version } = req.body as { status?: string; ip_address?: string; last_seen?: string; agent_version?: string };
     if (!status) { res.status(400).json({ error: 'Missing required field: status' }); return; }
     if (!['online', 'offline', 'error', 'maintenance'].includes(status)) { res.status(400).json({ error: 'Invalid status value' }); return; }
     const supabase = getSupabase();
-    const { data: device, error } = await supabase.from('devices').update({ status, ip_address, last_seen: last_seen || new Date().toISOString(), updated_at: new Date().toISOString() }).eq('tenant_id', req.tenant.id).eq('id', req.params.id).select().single();
+    const updatePayload: Record<string, unknown> = { status, ip_address, last_seen: last_seen || new Date().toISOString(), updated_at: new Date().toISOString() };
+    if (agent_version) updatePayload.agent_version = agent_version;
+    const { data: device, error } = await supabase.from('devices').update(updatePayload).eq('tenant_id', req.tenant.id).eq('id', req.params.id).select().single();
     if (error || !device) { res.status(404).json({ error: 'Device not found' }); return; }
     res.json({ data: device, statusCode: 200 });
   } catch (err) { logger.error('Update device error:', err); res.status(500).json({ error: 'Internal server error' }); }

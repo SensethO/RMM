@@ -5,7 +5,7 @@
  * Usage: node agent.js
  */
 
-const AGENT_VERSION = '1.0.6';
+const AGENT_VERSION = '1.1.0';
 const AGENT_RAW_URL = 'https://raw.githubusercontent.com/SensethO/RMM/master/agent-windows/agent.js';
 
 const https = require('https');
@@ -272,9 +272,10 @@ async function registerDevice() {
 // ─── Step 3: Update status online ────────────────────────────────────────────
 async function setOnline() {
   await request('PATCH', `/api/devices/${deviceDbId}`, {
-    status:     'online',
-    ip_address: getIpAddress(),
-    last_seen:  new Date().toISOString(),
+    status:        'online',
+    ip_address:    getIpAddress(),
+    last_seen:     new Date().toISOString(),
+    agent_version: AGENT_VERSION,
   });
 }
 
@@ -310,9 +311,10 @@ async function sendTelemetry() {
 
   // Also update last_seen + status
   await request('PATCH', `/api/devices/${deviceDbId}`, {
-    status:    'online',
-    last_seen: new Date().toISOString(),
-    ip_address: getIpAddress(),
+    status:        'online',
+    last_seen:     new Date().toISOString(),
+    ip_address:    getIpAddress(),
+    agent_version: AGENT_VERSION,
   });
 }
 

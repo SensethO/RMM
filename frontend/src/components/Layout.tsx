@@ -1,5 +1,6 @@
 import { ReactNode } from 'react';
 import { Link, useLocation } from 'react-router-dom';
+import { APP_VERSION } from '../version';
 
 interface LayoutProps {
   children: ReactNode;
@@ -57,6 +58,9 @@ export default function Layout({ children }: LayoutProps) {
           >
             Logout
           </button>
+          <p className="text-center text-blue-300 text-xs mt-3 opacity-70">
+            RMM v{APP_VERSION}
+          </p>
         </div>
       </div>
 
