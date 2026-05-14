@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useApiClient } from '../hooks/useApi';
 import { deviceAPI, commandAPI } from '../api/client';
@@ -225,6 +225,9 @@ export default function DeviceDetail() {
         </div>
       )}
 
+      {/* Network */}
+      <NetworkSection deviceId={id!} />
+
       {/* Recent Commands */}
       <div className="bg-white rounded-lg shadow p-6">
         <h2 className="text-lg font-semibold text-gray-800 mb-4">Recent Commands</h2>
@@ -268,6 +271,281 @@ function InfoRow({ label, value }: { label: string; value: React.ReactNode }) {
     <div className="flex justify-between items-start text-sm">
       <span className="text-gray-500 w-28 shrink-0">{label}</span>
       <span className="text-gray-900 text-right">{value}</span>
+    </div>
+  );
+}
+
+// ─── Network section ──────────────────────────────────────────────────────────
+interface NetworkInfo {
+  public_ip: string;
+  local_ip: string;
+  hostname: string;
+  adapters: { name: string; family: string; address: string; mac: string }[];
+  gateways: string[];
+  dns_servers: string[];
+  timestamp: string;
+}
+
+interface BandwidthResult {
+  timestamp: string;
+  download_mbps: number;
+  upload_mbps: number | null;
+  details: { test: string; download_mbps?: number; elapsed_s?: number; received_mb?: number; error?: string }[];
+}
+
+function NetworkSection({ deviceId }: { deviceId: string }) {
+  const [netInfo, setNetInfo]             = useState<NetworkInfo | null>(null);
+  const [netLoading, setNetLoading]       = useState(false);
+  const [netError, setNetError]           = useState<string | null>(null);
+  const [bwResult, setBwResult]           = useState<BandwidthResult | null>(null);
+  const [bwLoading, setBwLoading]         = useState(false);
+  const [bwError, setBwError]             = useState<string | null>(null);
+  const netPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const bwPollRef  = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    loadNetworkInfo();
+    return () => {
+      if (netPollRef.current) clearInterval(netPollRef.current);
+      if (bwPollRef.current)  clearInterval(bwPollRef.current);
+    };
+  }, [deviceId]);
+
+  async function loadNetworkInfo() {
+    // Use recent result from history if < 5 min old
+    try {
+      const hist = await commandAPI.getHistory(deviceId, 30);
+      const cmds = (hist.data.data as Record<string, unknown>[]) || [];
+      const recent = cmds.find(
+        c => c.command_type === 'get_network_info' &&
+             c.status === 'success' &&
+             new Date(c.created_at as string).getTime() > Date.now() - 5 * 60 * 1000
+      );
+      if (recent?.output) {
+        setNetInfo(JSON.parse(recent.output as string) as NetworkInfo);
+        return;
+      }
+    } catch {}
+    runNetworkInfo();
+  }
+
+  async function runNetworkInfo() {
+    setNetLoading(true);
+    setNetError(null);
+    try {
+      const res = await commandAPI.queue(deviceId, { command_type: 'get_network_info' });
+      const cmdId = (res.data.data as Record<string, unknown>).id as string;
+      pollCommand(cmdId, netPollRef, (output) => {
+        setNetInfo(JSON.parse(output) as NetworkInfo);
+        setNetLoading(false);
+      }, (err) => { setNetError(err); setNetLoading(false); });
+    } catch (e) {
+      setNetError(e instanceof Error ? e.message : 'Erreur');
+      setNetLoading(false);
+    }
+  }
+
+  async function runBandwidthTest() {
+    setBwLoading(true);
+    setBwError(null);
+    setBwResult(null);
+    try {
+      const res = await commandAPI.queue(deviceId, { command_type: 'bandwidth_test' });
+      const cmdId = (res.data.data as Record<string, unknown>).id as string;
+      pollCommand(cmdId, bwPollRef, (output) => {
+        setBwResult(JSON.parse(output) as BandwidthResult);
+        setBwLoading(false);
+      }, (err) => { setBwError(err); setBwLoading(false); });
+    } catch (e) {
+      setBwError(e instanceof Error ? e.message : 'Erreur');
+      setBwLoading(false);
+    }
+  }
+
+  function pollCommand(
+    cmdId: string,
+    ref: React.MutableRefObject<ReturnType<typeof setInterval> | null>,
+    onSuccess: (output: string) => void,
+    onError: (err: string) => void,
+  ) {
+    let attempts = 0;
+    ref.current = setInterval(async () => {
+      attempts++;
+      if (attempts > 40) {
+        clearInterval(ref.current!);
+        onError('Timeout — l\'agent ne répond pas');
+        return;
+      }
+      try {
+        const hist = await commandAPI.getHistory(deviceId, 20);
+        const cmd = (hist.data.data as Record<string, unknown>[])?.find(c => c.id === cmdId);
+        if (cmd?.status === 'success' && cmd.output) {
+          clearInterval(ref.current!);
+          onSuccess(cmd.output as string);
+        } else if (cmd?.status === 'failed') {
+          clearInterval(ref.current!);
+          onError(cmd.output as string || 'Commande échouée');
+        }
+      } catch {}
+    }, 3000);
+  }
+
+  const speedColor = (mbps: number) =>
+    mbps >= 100 ? 'text-green-600' : mbps >= 20 ? 'text-yellow-600' : 'text-red-600';
+
+  return (
+    <div className="space-y-6">
+      {/* Network Environment */}
+      <div className="bg-white rounded-lg shadow p-6">
+        <div className="flex items-center justify-between border-b pb-3 mb-4">
+          <h2 className="text-lg font-semibold text-gray-800">🌐 Environnement réseau</h2>
+          <button
+            onClick={runNetworkInfo}
+            disabled={netLoading}
+            className="text-sm text-blue-600 hover:text-blue-800 font-medium disabled:opacity-50"
+          >
+            {netLoading ? '⏳ Actualisation...' : '↻ Actualiser'}
+          </button>
+        </div>
+
+        {netLoading && !netInfo && (
+          <div className="flex items-center gap-2 text-gray-500 text-sm py-4">
+            <div className="animate-spin h-4 w-4 border-2 border-blue-500 border-t-transparent rounded-full" />
+            Interrogation de l'agent...
+          </div>
+        )}
+        {netError && <p className="text-red-500 text-sm">{netError}</p>}
+
+        {netInfo && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* IPs */}
+            <div className="space-y-2">
+              <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide">Adresses IP</h3>
+              <div className="bg-blue-50 rounded-lg p-3 space-y-1">
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-600">IP Publique</span>
+                  <span className="font-mono font-bold text-blue-700">{netInfo.public_ip}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-600">IP Locale</span>
+                  <span className="font-mono text-gray-800">{netInfo.local_ip}</span>
+                </div>
+                {netInfo.gateways.length > 0 && (
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-600">Passerelle</span>
+                    <span className="font-mono text-gray-800">{netInfo.gateways[0]}</span>
+                  </div>
+                )}
+              </div>
+
+              {netInfo.dns_servers.length > 0 && (
+                <>
+                  <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mt-3">Serveurs DNS</h3>
+                  <div className="space-y-1">
+                    {netInfo.dns_servers.map(dns => (
+                      <span key={dns} className="inline-block bg-gray-100 text-gray-700 font-mono text-xs px-2 py-1 rounded mr-1">{dns}</span>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* Adapters */}
+            <div>
+              <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-2">Adaptateurs réseau</h3>
+              <div className="space-y-2">
+                {netInfo.adapters.filter(a => a.family === 'IPv4').map((a, i) => (
+                  <div key={i} className="bg-gray-50 rounded p-2 text-xs">
+                    <div className="font-semibold text-gray-700 truncate">{a.name}</div>
+                    <div className="font-mono text-gray-600">{a.address}</div>
+                    <div className="text-gray-400">{a.mac}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+        {netInfo && (
+          <p className="text-xs text-gray-400 mt-3">
+            Mis à jour {new Date(netInfo.timestamp).toLocaleTimeString()}
+          </p>
+        )}
+      </div>
+
+      {/* Bandwidth Test */}
+      <div className="bg-white rounded-lg shadow p-6">
+        <div className="flex items-center justify-between border-b pb-3 mb-4">
+          <h2 className="text-lg font-semibold text-gray-800">⚡ Test de bande passante</h2>
+          <button
+            onClick={runBandwidthTest}
+            disabled={bwLoading}
+            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg transition disabled:opacity-50"
+          >
+            {bwLoading ? '⏳ Test en cours (~30s)...' : '▶ Lancer le test'}
+          </button>
+        </div>
+
+        {bwLoading && (
+          <div className="space-y-2">
+            <div className="flex items-center gap-2 text-gray-500 text-sm">
+              <div className="animate-spin h-4 w-4 border-2 border-blue-500 border-t-transparent rounded-full" />
+              Test en cours sur l'agent distant... (5 MB + 20 MB + upload)
+            </div>
+            <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
+              <div className="h-2 bg-blue-500 rounded-full animate-pulse" style={{ width: '60%' }} />
+            </div>
+          </div>
+        )}
+        {bwError && <p className="text-red-500 text-sm">{bwError}</p>}
+
+        {bwResult && (
+          <div className="space-y-4">
+            {/* Summary */}
+            <div className="grid grid-cols-2 gap-4">
+              <div className="bg-green-50 rounded-lg p-4 text-center">
+                <div className={`text-3xl font-bold ${speedColor(bwResult.download_mbps)}`}>
+                  {bwResult.download_mbps}
+                </div>
+                <div className="text-sm text-gray-600 mt-1">Mbps ↓ Download</div>
+              </div>
+              <div className="bg-blue-50 rounded-lg p-4 text-center">
+                <div className={`text-3xl font-bold ${bwResult.upload_mbps ? speedColor(bwResult.upload_mbps) : 'text-gray-400'}`}>
+                  {bwResult.upload_mbps ?? '—'}
+                </div>
+                <div className="text-sm text-gray-600 mt-1">Mbps ↑ Upload</div>
+              </div>
+            </div>
+            {/* Details */}
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 border-b">
+                  <tr>
+                    {['Test', 'Download (Mbps)', 'Durée', 'Données reçues'].map(h => (
+                      <th key={h} className="px-3 py-2 text-left text-xs font-semibold text-gray-600">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {bwResult.details.map((d, i) => (
+                    <tr key={i} className="border-b">
+                      <td className="px-3 py-2 font-medium">{d.test}</td>
+                      <td className={`px-3 py-2 font-mono font-bold ${d.download_mbps ? speedColor(d.download_mbps) : 'text-red-500'}`}>
+                        {d.download_mbps ?? d.error ?? '—'}
+                      </td>
+                      <td className="px-3 py-2 text-gray-600">{d.elapsed_s ? `${d.elapsed_s}s` : '—'}</td>
+                      <td className="px-3 py-2 text-gray-600">{d.received_mb ? `${d.received_mb} MB` : '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="text-xs text-gray-400">Test effectué le {new Date(bwResult.timestamp).toLocaleString()}</p>
+          </div>
+        )}
+        {!bwResult && !bwLoading && !bwError && (
+          <p className="text-gray-400 text-sm">Cliquez sur "Lancer le test" pour mesurer la bande passante depuis le device.</p>
+        )}
+      </div>
     </div>
   );
 }

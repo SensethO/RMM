@@ -99,6 +99,19 @@ function getRamPercent() {
   return Math.round(((total - free) / total) * 100);
 }
 
+// ─── Public IP ───────────────────────────────────────────────────────────────
+function fetchPublicIp() {
+  return new Promise((resolve) => {
+    https.get('https://api.ipify.org?format=json', (res) => {
+      let data = '';
+      res.on('data', c => data += c);
+      res.on('end', () => {
+        try { resolve(JSON.parse(data).ip); } catch { resolve(null); }
+      });
+    }).on('error', () => resolve(null));
+  });
+}
+
 // ─── Disk usage (Windows: partition C:) ──────────────────────────────────────
 function getDiskPercent() {
   // PowerShell first (wmic supprimé dans Windows 11 22H2+)
@@ -437,6 +450,101 @@ async function executeCommand(type, params) {
       } catch (e) {
         return `Erreur disk_info: ${e.message}`;
       }
+    }
+
+    case 'get_network_info': {
+      const ifaces = os.networkInterfaces();
+      const adapters = [];
+      for (const [name, addrs] of Object.entries(ifaces)) {
+        for (const addr of addrs) {
+          if (!addr.internal) {
+            adapters.push({ name, family: addr.family, address: addr.address, mac: addr.mac });
+          }
+        }
+      }
+
+      // Gateway + DNS via ipconfig /all (FR et EN)
+      let gateways = [], dnsServers = [];
+      try {
+        const ipcfg = execSync('ipconfig /all', { encoding: 'utf8', timeout: 5000 });
+        const gwMatches = [...ipcfg.matchAll(/(?:Default Gateway|Passerelle par d[^:]*)\.*\s*:\s*([\d.]+)/gi)];
+        const dnsMatches = [...ipcfg.matchAll(/(?:DNS Servers|Serveurs DNS)\.*\s*:\s*([\d.]+)/gi)];
+        gateways   = [...new Set(gwMatches.map(m => m[1]).filter(Boolean))];
+        dnsServers = [...new Set(dnsMatches.map(m => m[1]).filter(Boolean))];
+      } catch {}
+
+      const publicIp = await fetchPublicIp();
+
+      return JSON.stringify({
+        public_ip:  publicIp || 'unavailable',
+        local_ip:   getIpAddress(),
+        hostname:   os.hostname(),
+        adapters,
+        gateways,
+        dns_servers: dnsServers,
+        timestamp:  new Date().toISOString(),
+      }, null, 2);
+    }
+
+    case 'bandwidth_test': {
+      const testSizes = [
+        { label: '5 MB',  bytes: 5_000_000  },
+        { label: '20 MB', bytes: 20_000_000 },
+      ];
+      const results = [];
+
+      for (const { label, bytes } of testSizes) {
+        const url   = `https://speed.cloudflare.com/__down?bytes=${bytes}`;
+        const start = Date.now();
+        try {
+          const received = await new Promise((resolve, reject) => {
+            let total = 0;
+            https.get(url, res => {
+              res.on('data', chunk => { total += chunk.length; });
+              res.on('end',  () => resolve(total));
+              res.on('error', reject);
+            }).on('error', reject);
+          });
+          const elapsed = (Date.now() - start) / 1000;
+          results.push({
+            test:       label,
+            download_mbps: +((received * 8) / (elapsed * 1e6)).toFixed(2),
+            elapsed_s:  +elapsed.toFixed(2),
+            received_mb: +(received / 1024 / 1024).toFixed(2),
+          });
+        } catch (e) {
+          results.push({ test: label, error: e.message });
+        }
+      }
+
+      // Upload test: POST 2 MB to Cloudflare
+      let uploadMbps = null;
+      try {
+        const uploadBytes = 2_000_000;
+        const buf = Buffer.alloc(uploadBytes, 'x');
+        const upStart = Date.now();
+        await new Promise((resolve, reject) => {
+          const req = https.request({
+            hostname: 'speed.cloudflare.com',
+            path: '/__up',
+            method: 'POST',
+            headers: { 'Content-Length': uploadBytes, 'Content-Type': 'application/octet-stream' },
+          }, res => { res.resume(); res.on('end', resolve); });
+          req.on('error', reject);
+          req.write(buf);
+          req.end();
+        });
+        const upElapsed = (Date.now() - upStart) / 1000;
+        uploadMbps = +((uploadBytes * 8) / (upElapsed * 1e6)).toFixed(2);
+      } catch {}
+
+      const best = results.find(r => r.download_mbps)?.download_mbps;
+      return JSON.stringify({
+        timestamp:       new Date().toISOString(),
+        download_mbps:   best || 0,
+        upload_mbps:     uploadMbps,
+        details:         results,
+      }, null, 2);
     }
 
     case 'self_update': {
