@@ -3,7 +3,6 @@
   "version": "0.1.0",
   "description": "RMM Platform - Multi-tenant REST API",
   "main": "dist/server.js",
-  "type": "module",
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
