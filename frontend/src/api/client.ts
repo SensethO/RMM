@@ -145,6 +145,38 @@ export const alertAPI = {
     getApiClient().patch<ApiResponse<Record<string, unknown>>>(`/api/alerts/${alertId}/acknowledge`),
 };
 
+// Config / Settings API
+export interface AgentConfig {
+  telemetryInterval: number;
+  pollInterval:      number;
+  commandTimeout:    number;
+  maxOutputLength:   number;
+  alerts: {
+    cpuThreshold:  number;
+    ramThreshold:  number;
+    diskThreshold: number;
+  };
+}
+
+export const configAPI = {
+  getGlobal: () =>
+    getApiClient().get<ApiResponse<AgentConfig> & { isDefault: boolean }>('/api/config'),
+
+  saveGlobal: (config: Partial<AgentConfig>) =>
+    getApiClient().put<ApiResponse<AgentConfig>>('/api/config', config),
+
+  getForDevice: (deviceId: string) =>
+    getApiClient().get<ApiResponse<AgentConfig> & { globalConfig: Partial<AgentConfig> | null; deviceOverride: Partial<AgentConfig> | null }>(
+      `/api/devices/${deviceId}/config`
+    ),
+
+  saveForDevice: (deviceId: string, config: Partial<AgentConfig>) =>
+    getApiClient().put<ApiResponse<AgentConfig>>(`/api/devices/${deviceId}/config`, config),
+
+  resetDevice: (deviceId: string) =>
+    getApiClient().delete<ApiResponse<null>>(`/api/devices/${deviceId}/config`),
+};
+
 // Health check
 export const health = {
   check: () => getApiClient().get<ApiResponse<Record<string, unknown>>>('/api/health'),

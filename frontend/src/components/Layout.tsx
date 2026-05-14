@@ -18,6 +18,7 @@ export default function Layout({ children }: LayoutProps) {
     { href: '/devices', label: 'Devices', icon: '💻' },
     { href: '/commands', label: 'Commands', icon: '⚙️' },
     { href: '/alerts', label: 'Alerts', icon: '🚨' },
+    { href: '/settings', label: 'Settings', icon: '⚙️' },
   ];
 
   const isActive = (href: string) =>

@@ -12,17 +12,30 @@ const { execSync } = require('child_process');
 
 // ─── Configuration ────────────────────────────────────────────────────────────
 const CONFIG = {
-  backend:          'https://backend-xi-one-36.vercel.app',
-  username:         'admin',
-  password:         'demo123',
-  telemetryInterval: 30_000,  // ms entre chaque envoi de télémetrie
-  pollInterval:      15_000,  // ms entre chaque poll de commandes
+  backend:  'https://backend-xi-one-36.vercel.app',
+  username: 'admin',
+  password: 'demo123',
+};
+
+// Paramètres actifs (mis à jour depuis le backend)
+let agentConfig = {
+  telemetryInterval: 30,   // secondes
+  pollInterval:      15,   // secondes
+  commandTimeout:    30,   // secondes
+  maxOutputLength:  1000,  // caractères
+  alerts: {
+    cpuThreshold:  80,
+    ramThreshold:  90,
+    diskThreshold: 85,
+  },
 };
 
 // ─── State ────────────────────────────────────────────────────────────────────
-let authToken  = null;
-let deviceDbId = null;      // UUID Supabase du device (retourné par /register)
-let deviceInfo = null;
+let authToken      = null;
+let deviceDbId     = null;   // UUID Supabase du device (retourné par /register)
+let deviceInfo     = null;
+let telemetryTimer = null;
+let pollTimer      = null;
 
 // ─── HTTP helper ──────────────────────────────────────────────────────────────
 function request(method, path, body) {
@@ -127,6 +140,48 @@ function getDeviceId() {
     if (mac !== 'unknown') break;
   }
   return `WIN-${hostname.toUpperCase()}-${mac}`.substring(0, 50);
+}
+
+// ─── Fetch config from backend ────────────────────────────────────────────────
+async function fetchConfig() {
+  try {
+    const res = await request('GET', `/api/devices/${deviceDbId}/config`, null);
+    if (res.status === 200 && res.data?.data) {
+      const c = res.data.data;
+      const prev = { ...agentConfig };
+      if (c.telemetryInterval) agentConfig.telemetryInterval = c.telemetryInterval;
+      if (c.pollInterval)      agentConfig.pollInterval      = c.pollInterval;
+      if (c.commandTimeout)    agentConfig.commandTimeout    = c.commandTimeout;
+      if (c.maxOutputLength)   agentConfig.maxOutputLength   = c.maxOutputLength;
+      if (c.alerts)            agentConfig.alerts            = { ...agentConfig.alerts, ...c.alerts };
+
+      const changed = prev.telemetryInterval !== agentConfig.telemetryInterval
+                   || prev.pollInterval      !== agentConfig.pollInterval;
+      if (changed) {
+        console.log(`🔧 Config rechargée depuis le backend :`);
+        console.log(`   Télémetrie : ${agentConfig.telemetryInterval}s | Poll : ${agentConfig.pollInterval}s`);
+        console.log(`   Seuils alertes → CPU: ${agentConfig.alerts.cpuThreshold}% | RAM: ${agentConfig.alerts.ramThreshold}% | Disk: ${agentConfig.alerts.diskThreshold}%`);
+        return true; // intervals changed → caller should restart timers
+      }
+    }
+  } catch (e) {
+    console.warn('   ⚠️  Config fetch failed (using current values):', e.message);
+  }
+  return false;
+}
+
+// ─── Start/restart interval timers ───────────────────────────────────────────
+function restartTimers() {
+  if (telemetryTimer) clearInterval(telemetryTimer);
+  if (pollTimer)      clearInterval(pollTimer);
+
+  telemetryTimer = setInterval(async () => {
+    try { await sendTelemetry(); } catch (e) { console.error('Telemetry error:', e.message); }
+  }, agentConfig.telemetryInterval * 1000);
+
+  pollTimer = setInterval(async () => {
+    try { await pollCommands(); } catch (e) { console.error('Poll error:', e.message); }
+  }, agentConfig.pollInterval * 1000);
 }
 
 // ─── Step 1: Login ────────────────────────────────────────────────────────────
@@ -263,7 +318,7 @@ async function pollCommands() {
     await request('PATCH', `/api/commands/${cmd.id}`, {
       status:    success ? 'success' : 'failed',
       exit_code: exitCode,
-      output:    output.substring(0, 1000),
+      output:    output.substring(0, agentConfig.maxOutputLength),
     });
   }
 }
@@ -375,22 +430,28 @@ async function main() {
     if (!ok) { console.error('Impossible de s\'enregistrer.'); process.exit(1); }
 
     await setOnline();
+
+    // Charger la config depuis le backend
+    console.log('\n⚙️  Chargement de la configuration...');
+    await fetchConfig();
+    console.log(`   Télémetrie : ${agentConfig.telemetryInterval}s | Poll : ${agentConfig.pollInterval}s`);
+    console.log(`   Seuils → CPU: ${agentConfig.alerts.cpuThreshold}% | RAM: ${agentConfig.alerts.ramThreshold}% | Disk: ${agentConfig.alerts.diskThreshold}%`);
+
     await sendTelemetry();      // première mesure immédiate
     await pollCommands();
 
-    // Boucle telemetrie
-    setInterval(async () => {
-      try { await sendTelemetry(); } catch (e) { console.error('Telemetry error:', e.message); }
-    }, CONFIG.telemetryInterval);
+    // Boucles telemetrie + commandes (intervalles dynamiques)
+    restartTimers();
 
-    // Boucle commandes
+    // Rechargement config toutes les 5 minutes
     setInterval(async () => {
-      try { await pollCommands(); } catch (e) { console.error('Poll error:', e.message); }
-    }, CONFIG.pollInterval);
+      const changed = await fetchConfig();
+      if (changed) restartTimers();
+    }, 5 * 60 * 1000);
 
     console.log(`\n🟢 Agent actif !`);
-    console.log(`   Télémetrie toutes les ${CONFIG.telemetryInterval / 1000}s`);
-    console.log(`   Commandes toutes les  ${CONFIG.pollInterval / 1000}s`);
+    console.log(`   Télémetrie toutes les ${agentConfig.telemetryInterval}s`);
+    console.log(`   Commandes toutes les  ${agentConfig.pollInterval}s`);
     console.log(`   Ctrl+C pour arrêter\n`);
 
   } catch (err) {

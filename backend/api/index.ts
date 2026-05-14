@@ -218,6 +218,33 @@ app.post('/api/devices/:device_id/telemetry', async (req: Request, res: Response
     if (!device) { res.status(404).json({ error: 'Device not found' }); return; }
     const { data: telemetry, error } = await supabase.from('device_telemetry').insert({ device_id: req.params.device_id, cpu_percent, ram_percent, disk_percent, network_bytes_sec: network_bytes_sec || 0, timestamp: new Date().toISOString() }).select().single();
     if (error) { logger.error('Store telemetry:', error); res.status(500).json({ error: 'Failed to store telemetry' }); return; }
+
+    // ─── Auto-alert based on configured thresholds ──────────────────────────
+    try {
+      const [{ data: globalCfg }, { data: deviceCfg }] = await Promise.all([
+        supabase.from('device_configs').select('config').eq('tenant_id', req.tenant.id).eq('device_id', GLOBAL_CONFIG_KEY).single(),
+        supabase.from('device_configs').select('config').eq('tenant_id', req.tenant.id).eq('device_id', req.params.device_id).single(),
+      ]);
+      const cfg = mergeConfig(globalCfg?.config || {}, deviceCfg?.config || {});
+      const checks: { metric: string; value: number; threshold: number; type: string }[] = [
+        { metric: 'CPU',  value: cpu_percent,  threshold: cfg.alerts.cpuThreshold,  type: 'cpu_high'  },
+        { metric: 'RAM',  value: ram_percent,  threshold: cfg.alerts.ramThreshold,  type: 'ram_high'  },
+        { metric: 'Disk', value: disk_percent, threshold: cfg.alerts.diskThreshold, type: 'disk_high' },
+      ];
+      const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+      for (const check of checks) {
+        if (check.value >= check.threshold) {
+          // Skip if recent unacknowledged alert of same type already exists
+          const { data: recent } = await supabase.from('alerts').select('id').eq('tenant_id', req.tenant.id).eq('device_id', req.params.device_id).eq('alert_type', check.type).eq('acknowledged', false).gte('created_at', fiveMinutesAgo).limit(1).single();
+          if (!recent) {
+            const severity = check.value >= 95 ? 'critical' : 'warning';
+            await supabase.from('alerts').insert({ tenant_id: req.tenant.id, device_id: req.params.device_id, alert_type: check.type, severity, message: `${check.metric} at ${check.value}% (threshold: ${check.threshold}%)`, acknowledged: false, created_at: new Date().toISOString() });
+            logger.info(`Alert created: ${check.type} ${check.value}% on device ${req.params.device_id}`);
+          }
+        }
+      }
+    } catch (alertErr) { logger.warn('Auto-alert error (non-fatal):', alertErr); }
+
     res.status(201).json({ data: telemetry, statusCode: 201 });
   } catch (err) { logger.error('Telemetry error:', err); res.status(500).json({ error: 'Internal server error' }); }
 });
@@ -292,6 +319,121 @@ commandsRouter.get('/:device_id/history', async (req: Request, res: Response) =>
 });
 
 app.use('/api/commands', commandsRouter);
+
+// ─── Config / Settings routes ────────────────────────────────────────────────
+// Sentinel UUID used as device_id for tenant-wide global defaults
+const GLOBAL_CONFIG_KEY = '00000000-0000-0000-0000-000000000000';
+
+const DEFAULT_CONFIG = {
+  telemetryInterval: 30,   // seconds between telemetry reports
+  pollInterval:      15,   // seconds between command polls
+  commandTimeout:    30,   // seconds before a command is killed
+  maxOutputLength:  1000,  // chars kept from command output
+  alerts: {
+    cpuThreshold:  80,     // % CPU  → creates alert
+    ramThreshold:  90,     // % RAM  → creates alert
+    diskThreshold: 85,     // % Disk → creates alert
+  },
+};
+
+type AgentConfig = typeof DEFAULT_CONFIG;
+
+function mergeConfig(...layers: Partial<AgentConfig>[]): AgentConfig {
+  let result: AgentConfig = { ...DEFAULT_CONFIG, alerts: { ...DEFAULT_CONFIG.alerts } };
+  for (const layer of layers) {
+    if (!layer) continue;
+    const { alerts, ...rest } = layer as Record<string, unknown>;
+    result = { ...result, ...rest } as AgentConfig;
+    if (alerts && typeof alerts === 'object') {
+      result.alerts = { ...result.alerts, ...(alerts as Record<string, number>) };
+    }
+  }
+  return result;
+}
+
+// GET /api/config — global defaults for the tenant
+app.get('/api/config', async (req: Request, res: Response) => {
+  if (!req.tenant) { res.status(401).json({ error: 'Missing tenant context' }); return; }
+  try {
+    const { data } = await getSupabase()
+      .from('device_configs')
+      .select('config')
+      .eq('tenant_id', req.tenant.id)
+      .eq('device_id', GLOBAL_CONFIG_KEY)
+      .single();
+    const merged = mergeConfig(data?.config || {});
+    res.json({ data: merged, isDefault: !data, statusCode: 200 });
+  } catch {
+    res.json({ data: DEFAULT_CONFIG, isDefault: true, statusCode: 200 });
+  }
+});
+
+// PUT /api/config — save global defaults
+app.put('/api/config', async (req: Request, res: Response) => {
+  if (!req.tenant) { res.status(401).json({ error: 'Missing tenant context' }); return; }
+  try {
+    const config = req.body as Record<string, unknown>;
+    const { error } = await getSupabase()
+      .from('device_configs')
+      .upsert(
+        { tenant_id: req.tenant.id, device_id: GLOBAL_CONFIG_KEY, config, updated_at: new Date().toISOString() },
+        { onConflict: 'tenant_id,device_id' }
+      );
+    if (error) {
+      logger.error('Save global config:', error);
+      res.status(503).json({ error: 'Settings table not ready — run supabase/add_device_configs.sql first', statusCode: 503 });
+      return;
+    }
+    res.json({ data: mergeConfig(config), statusCode: 200 });
+  } catch (err) { logger.error('PUT /api/config:', err); res.status(500).json({ error: 'Internal server error' }); }
+});
+
+// GET /api/devices/:id/config — merged config (defaults + global + device overrides)
+app.get('/api/devices/:id/config', async (req: Request, res: Response) => {
+  if (!req.tenant) { res.status(401).json({ error: 'Missing tenant context' }); return; }
+  try {
+    const supabase = getSupabase();
+    const [{ data: globalRow }, { data: deviceRow }] = await Promise.all([
+      supabase.from('device_configs').select('config').eq('tenant_id', req.tenant.id).eq('device_id', GLOBAL_CONFIG_KEY).single(),
+      supabase.from('device_configs').select('config').eq('tenant_id', req.tenant.id).eq('device_id', req.params.id).single(),
+    ]);
+    const merged = mergeConfig(globalRow?.config || {}, deviceRow?.config || {});
+    res.json({ data: merged, globalConfig: globalRow?.config || null, deviceOverride: deviceRow?.config || null, statusCode: 200 });
+  } catch {
+    res.json({ data: DEFAULT_CONFIG, globalConfig: null, deviceOverride: null, statusCode: 200 });
+  }
+});
+
+// PUT /api/devices/:id/config — save device-specific overrides
+app.put('/api/devices/:id/config', async (req: Request, res: Response) => {
+  if (!req.tenant) { res.status(401).json({ error: 'Missing tenant context' }); return; }
+  try {
+    const config = req.body as Record<string, unknown>;
+    const { error } = await getSupabase()
+      .from('device_configs')
+      .upsert(
+        { tenant_id: req.tenant.id, device_id: req.params.id, config, updated_at: new Date().toISOString() },
+        { onConflict: 'tenant_id,device_id' }
+      );
+    if (error) {
+      logger.error('Save device config:', error);
+      res.status(503).json({ error: 'Settings table not ready — run supabase/add_device_configs.sql first', statusCode: 503 });
+      return;
+    }
+    // Return merged view
+    const { data: globalRow } = await getSupabase().from('device_configs').select('config').eq('tenant_id', req.tenant.id).eq('device_id', GLOBAL_CONFIG_KEY).single();
+    res.json({ data: mergeConfig(globalRow?.config || {}, config), deviceOverride: config, statusCode: 200 });
+  } catch (err) { logger.error('PUT device config:', err); res.status(500).json({ error: 'Internal server error' }); }
+});
+
+// DELETE /api/devices/:id/config — remove device overrides (reverts to global)
+app.delete('/api/devices/:id/config', async (req: Request, res: Response) => {
+  if (!req.tenant) { res.status(401).json({ error: 'Missing tenant context' }); return; }
+  try {
+    await getSupabase().from('device_configs').delete().eq('tenant_id', req.tenant.id).eq('device_id', req.params.id);
+    res.json({ data: null, statusCode: 200 });
+  } catch (err) { logger.error('DELETE device config:', err); res.status(500).json({ error: 'Internal server error' }); }
+});
 
 // ─── Alerts routes ────────────────────────────────────────────────────────────
 app.get('/api/alerts', async (req: Request, res: Response) => {
