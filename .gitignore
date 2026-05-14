@@ -17,6 +17,11 @@ build/
 *.app
 out/
 
+# Agent build - garder les scripts sources, ignorer les binaires
+!agent-windows/build/
+agent-windows/build/dist/
+agent-windows/node_modules/
+
 # IDE
 .vscode/
 .idea/

@@ -1,0 +1,155 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  RMM Agent - WiX v4 Installer
+  Build: wix build installer.wxs -ext WixToolset.Util.wixext -out rmm-agent-setup.msi
+  Requires: dotnet tool install -g wix
+            wix extension add WixToolset.Util.wixext
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+
+  <Package
+    Name="RMM Agent"
+    Manufacturer="SensethO"
+    Version="1.1.1"
+    UpgradeCode="A1B2C3D4-E5F6-7890-ABCD-EF1234567890"
+    Language="1036"
+    Codepage="1252"
+    Scope="perMachine">
+
+    <!-- Upgrade: remove older version before installing newer -->
+    <MajorUpgrade
+      DowngradeErrorMessage="Une version plus récente de RMM Agent est déjà installée."
+      Schedule="afterInstallInitialize" />
+
+    <!-- Embed CAB inside MSI -->
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <!-- UI: minimal progress dialog -->
+    <WixVariable Id="WixUILicenseRtf" Value="license.rtf" />
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+
+    <!-- ─── Properties ──────────────────────────────────────────────── -->
+    <Property Id="SCHTASKS_BIN" Value="schtasks.exe" />
+
+    <!-- ─── Features ───────────────────────────────────────────────── -->
+    <Feature Id="ProductFeature" Title="RMM Agent" Level="1">
+      <ComponentGroupRef Id="AgentComponents" />
+    </Feature>
+
+    <!-- ─── Custom Actions ─────────────────────────────────────────── -->
+
+    <!-- Set command line for scheduled task creation -->
+    <SetProperty
+      Id="QtExec64CmdLine"
+      Value="schtasks /create /tn &quot;RMM-Agent&quot; /tr &quot;&quot;&quot;[INSTALLFOLDER]rmm-agent.exe&quot;&quot;&quot; /sc onstart /delay 0000:30 /ru SYSTEM /rl HIGHEST /f"
+      Before="CreateScheduledTask"
+      Sequence="execute" />
+
+    <CustomAction
+      Id="CreateScheduledTask"
+      BinaryRef="Wix4UtilCA_X64"
+      DllEntry="WixQuietExec64"
+      Execute="deferred"
+      Impersonate="no"
+      Return="ignore" />
+
+    <!-- Set command line for scheduled task start -->
+    <SetProperty
+      Id="QtExec64CmdLine"
+      Value="schtasks /run /tn &quot;RMM-Agent&quot;"
+      Before="StartScheduledTask"
+      Sequence="execute" />
+
+    <CustomAction
+      Id="StartScheduledTask"
+      BinaryRef="Wix4UtilCA_X64"
+      DllEntry="WixQuietExec64"
+      Execute="deferred"
+      Impersonate="no"
+      Return="ignore" />
+
+    <!-- Set command line for scheduled task stop+delete on uninstall -->
+    <SetProperty
+      Id="QtExec64CmdLine"
+      Value="cmd.exe /c schtasks /end /tn &quot;RMM-Agent&quot; &amp; schtasks /delete /tn &quot;RMM-Agent&quot; /f"
+      Before="RemoveScheduledTask"
+      Sequence="execute" />
+
+    <CustomAction
+      Id="RemoveScheduledTask"
+      BinaryRef="Wix4UtilCA_X64"
+      DllEntry="WixQuietExec64"
+      Execute="deferred"
+      Impersonate="no"
+      Return="ignore" />
+
+    <!-- ─── Execution Sequences ─────────────────────────────────────── -->
+    <InstallExecuteSequence>
+      <!-- On install/upgrade: create + start task after files are placed -->
+      <Custom Action="CreateScheduledTask" After="InstallFiles">
+        NOT Installed OR UPGRADINGPRODUCTCODE
+      </Custom>
+      <Custom Action="StartScheduledTask" After="CreateScheduledTask">
+        NOT Installed OR UPGRADINGPRODUCTCODE
+      </Custom>
+      <!-- On uninstall: stop + remove task before files are removed -->
+      <Custom Action="RemoveScheduledTask" Before="RemoveFiles">
+        Installed AND REMOVE AND NOT UPGRADINGPRODUCTCODE
+      </Custom>
+    </InstallExecuteSequence>
+
+  </Package>
+
+  <!-- ─── Directory Structure ──────────────────────────────────────── -->
+  <Fragment>
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="ManufacturerDir" Name="SensethO">
+          <Directory Id="INSTALLFOLDER" Name="RMM Agent" />
+        </Directory>
+      </Directory>
+    </Directory>
+  </Fragment>
+
+  <!-- ─── Components ───────────────────────────────────────────────── -->
+  <Fragment>
+    <ComponentGroup Id="AgentComponents" Directory="INSTALLFOLDER">
+
+      <!-- Main executable -->
+      <Component Id="AgentExe" Guid="11111111-1111-1111-1111-111111111111">
+        <File Id="RMMAgentExe"
+              Source="dist\rmm-agent.exe"
+              Name="rmm-agent.exe"
+              KeyPath="yes"
+              Checksum="yes" />
+      </Component>
+
+      <!-- Uninstall helper script -->
+      <Component Id="UninstallScript" Guid="22222222-2222-2222-2222-222222222222">
+        <File Id="UninstallBat"
+              Source="..\uninstall-service.bat"
+              Name="uninstall-service.bat" />
+      </Component>
+
+      <!-- Registry entry for uninstall display info -->
+      <Component Id="RegistryEntries" Guid="33333333-3333-3333-3333-333333333333">
+        <RegistryValue
+          Root="HKLM"
+          Key="SOFTWARE\SensethO\RMMAgent"
+          Name="InstallPath"
+          Type="string"
+          Value="[INSTALLFOLDER]"
+          KeyPath="yes" />
+        <RegistryValue
+          Root="HKLM"
+          Key="SOFTWARE\SensethO\RMMAgent"
+          Name="Version"
+          Type="string"
+          Value="1.1.1" />
+      </Component>
+
+    </ComponentGroup>
+  </Fragment>
+
+</Wix>
