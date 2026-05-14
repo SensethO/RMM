@@ -727,19 +727,53 @@ async function executeCommand(type, params) {
     }
 
     case 'list_installed_apps': {
-      console.log('   📋 Récupération des applications installées...');
+      console.log('   📋 Récupération des applications installées (registre)...');
+      // Registre Windows : source la plus complète et fiable, fonctionne en SYSTEM
+      const psScript = [
+        '$keys = @(',
+        '  "HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*",',
+        '  "HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*",',
+        '  "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*"',
+        ')',
+        '$seen = @{}',
+        '$apps = $keys | ForEach-Object {',
+        '  Get-ItemProperty $_ -ErrorAction SilentlyContinue',
+        '} | Where-Object { $_.DisplayName -and $_.DisplayName.Trim() -ne "" } |',
+        '  ForEach-Object {',
+        '    $key = $_.DisplayName.Trim()',
+        '    if (-not $seen[$key]) {',
+        '      $seen[$key] = $true',
+        '      [PSCustomObject]@{',
+        '        name      = $_.DisplayName.Trim()',
+        '        version   = if ($_.DisplayVersion) { $_.DisplayVersion.Trim() } else { "" }',
+        '        publisher = if ($_.Publisher) { $_.Publisher.Trim() } else { "" }',
+        '        install_date = if ($_.InstallDate) { $_.InstallDate } else { "" }',
+        '      }',
+        '    }',
+        '  } | Sort-Object name',
+        'Write-Output ($apps | ConvertTo-Json -Compress)',
+      ].join('\n');
+
       try {
-        const result = execSync('winget list --accept-source-agreements 2>nul', {
-          encoding: 'utf8', timeout: 30_000, shell: 'cmd.exe',
-        });
-        return result.trim();
-      } catch {
-        // Fallback PowerShell
         const result = execSync(
-          'powershell -Command "Get-Package | Select-Object Name,Version | Sort-Object Name | Format-Table -AutoSize | Out-String -Width 120"',
-          { encoding: 'utf8', timeout: 30_000 }
+          `powershell -NoProfile -NonInteractive -Command "${psScript.replace(/"/g, '\\"').replace(/\n/g, ' ')}"`,
+          { encoding: 'utf8', timeout: 45_000 }
         );
-        return result.trim();
+        const json = result.trim();
+        // Valider que c'est du JSON valide
+        JSON.parse(json);
+        return json;
+      } catch (regErr) {
+        console.log('   ⚠ Registre échoué, fallback winget list...');
+        // Fallback winget
+        try {
+          const out = execSync('winget list --accept-source-agreements 2>nul', {
+            encoding: 'utf8', timeout: 30_000, shell: 'cmd.exe',
+          });
+          return out.trim();
+        } catch {
+          return '[]';
+        }
       }
     }
 

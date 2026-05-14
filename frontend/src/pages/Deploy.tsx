@@ -1,16 +1,36 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { deployAPI, deviceAPI, commandAPI, AppDeployParams } from '../api/client';
 
-// ─── Parser sortie winget list ────────────────────────────────────────────────
-interface InstalledApp { name: string; id: string; version: string; available: string; source: string; }
+// ─── Parser inventaire logiciels ─────────────────────────────────────────────
+interface InstalledApp { name: string; version: string; publisher: string; install_date: string; id: string; available: string; }
 
-function parseWingetOutput(raw: string): InstalledApp[] {
+/** Tente JSON (registre Windows) puis fallback texte (winget list) */
+function parseAppsOutput(raw: string): InstalledApp[] {
+  const trimmed = raw.trim();
+
+  // ── Mode JSON (registre PowerShell) ──────────────────────────────────────
+  if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      const arr = Array.isArray(parsed) ? parsed : [parsed];
+      return arr
+        .filter((a: Record<string,string>) => a.name)
+        .map((a: Record<string,string>) => ({
+          name:         a.name         || '',
+          version:      a.version      || '',
+          publisher:    a.publisher    || '',
+          install_date: a.install_date || '',
+          id:           '',   // registre n'a pas d'ID winget
+          available:    '',
+        }));
+    } catch { /* fallback */ }
+  }
+
+  // ── Mode texte (winget list) ──────────────────────────────────────────────
   const lines = raw.split('\n');
-  // Trouver la ligne séparatrice (---...)
-  const sepIdx = lines.findIndex(l => /^[\-\s]+$/.test(l) && l.includes('---'));
+  const sepIdx = lines.findIndex(l => /^-[\-\s]+$/.test(l.trim()));
   if (sepIdx < 1) return [];
   const sep = lines[sepIdx];
-  // Positions de début de chaque colonne
   const cols: number[] = [];
   let inDash = false;
   for (let i = 0; i < sep.length; i++) {
@@ -23,28 +43,33 @@ function parseWingetOutput(raw: string): InstalledApp[] {
     return line.substring(start, end).trim();
   };
   return lines.slice(sepIdx + 1)
-    .filter(l => l.trim() && !/^[\-\s]+$/.test(l))
+    .filter(l => l.trim() && !/^[\-\s]+$/.test(l.trim()))
     .map(l => ({
-      name:      extract(l, 0),
-      id:        extract(l, 1),
-      version:   extract(l, 2),
-      available: extract(l, 3),
-      source:    extract(l, 4),
+      name:         extract(l, 0),
+      id:           extract(l, 1),
+      version:      extract(l, 2),
+      available:    extract(l, 3),
+      publisher:    '',
+      install_date: '',
     }))
-    .filter(a => a.name || a.id);
+    .filter(a => a.name);
 }
 
 function exportCSV(apps: InstalledApp[], deviceName: string) {
-  const header = 'Nom,ID winget,Version installée,Mise à jour disponible,Source';
+  const header = 'Nom,Version,Éditeur,Date installation,ID winget,Mise à jour disponible';
   const rows = apps.map(a =>
-    [a.name, a.id, a.version, a.available, a.source].map(v => `"${v.replace(/"/g, '""')}"`).join(',')
+    [a.name, a.version, a.publisher, a.install_date, a.id, a.available]
+      .map(v => `"${(v || '').replace(/"/g, '""')}"`)
+      .join(',')
   );
   const csv = [header, ...rows].join('\n');
   const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' });
   const url  = URL.createObjectURL(blob);
   const link = document.createElement('a');
-  link.href = url; link.download = `inventaire-${deviceName}-${new Date().toISOString().slice(0,10)}.csv`;
-  link.click(); URL.revokeObjectURL(url);
+  link.href = url;
+  link.download = `inventaire-${deviceName}-${new Date().toISOString().slice(0, 10)}.csv`;
+  link.click();
+  URL.revokeObjectURL(url);
 }
 
 // ─── Catalogue d'applications ─────────────────────────────────────────────────
@@ -260,7 +285,7 @@ export default function Deploy() {
           } else {
             const raw = (found.output as string) || '';
             setInvRaw(raw);
-            setInvApps(parseWingetOutput(raw));
+            setInvApps(parseAppsOutput(raw));
           }
         }
       } catch {}
@@ -379,8 +404,9 @@ export default function Deploy() {
                     <thead>
                       <tr className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wide border-b bg-gray-50">
                         <th className="px-5 py-3">Nom</th>
-                        <th className="px-5 py-3">ID winget</th>
-                        <th className="px-5 py-3">Version installée</th>
+                        <th className="px-5 py-3">Éditeur</th>
+                        <th className="px-5 py-3">Version</th>
+                        <th className="px-5 py-3">Date install.</th>
                         <th className="px-5 py-3">Mise à jour</th>
                       </tr>
                     </thead>
@@ -390,16 +416,17 @@ export default function Deploy() {
                         .map((a, i) => (
                           <tr key={i} className={`hover:bg-gray-50 ${a.available ? 'bg-orange-50' : ''}`}>
                             <td className="px-5 py-2.5 font-medium text-gray-900">{a.name || '—'}</td>
-                            <td className="px-5 py-2.5 text-gray-500 font-mono text-xs">{a.id || '—'}</td>
-                            <td className="px-5 py-2.5 text-gray-600">{a.version || '—'}</td>
+                            <td className="px-5 py-2.5 text-gray-500 text-xs">{a.publisher || (a.id ? <span className="font-mono">{a.id}</span> : '—')}</td>
+                            <td className="px-5 py-2.5 text-gray-600 text-xs">{a.version || '—'}</td>
+                            <td className="px-5 py-2.5 text-gray-400 text-xs">{a.install_date || '—'}</td>
                             <td className="px-5 py-2.5">
                               {a.available ? (
                                 <span className="text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full font-semibold">
                                   ⬆ {a.available}
                                 </span>
-                              ) : (
+                              ) : a.id ? (
                                 <span className="text-xs text-green-600">✓ à jour</span>
-                              )}
+                              ) : '—'}
                             </td>
                           </tr>
                         ))}
