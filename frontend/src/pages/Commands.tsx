@@ -102,6 +102,14 @@ const COMMAND_DEFS = [
     description: 'Reboot device (simulated)',
     params: [],
   },
+  {
+    value: 'self_update',
+    label: 'Mise à jour agent',
+    icon: '⬆️',
+    color: 'indigo',
+    description: 'Télécharge et installe la dernière version de l\'agent',
+    params: [],
+  },
 ] as const;
 
 type CommandType = typeof COMMAND_DEFS[number]['value'];
@@ -115,6 +123,7 @@ const colorMap: Record<string, string> = {
   orange: 'bg-orange-50 border-orange-200 hover:bg-orange-100 text-orange-700',
   teal:   'bg-teal-50 border-teal-200 hover:bg-teal-100 text-teal-700',
   red:    'bg-red-50 border-red-200 hover:bg-red-100 text-red-700',
+  indigo: 'bg-indigo-50 border-indigo-200 hover:bg-indigo-100 text-indigo-700',
 };
 
 const statusStyle: Record<string, string> = {
