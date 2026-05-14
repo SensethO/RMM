@@ -597,8 +597,36 @@ async function executeCommand(type, params) {
         if (!packageId) throw new Error('Paramètre manquant : package_id');
         console.log(`   📦 winget install ${packageId}...`);
         const cmd = `winget install --id "${packageId}" --silent --accept-package-agreements --accept-source-agreements --disable-interactivity`;
-        const result = execSync(cmd, { encoding: 'utf8', timeout: 300_000, shell: 'cmd.exe' });
-        return `✅ ${displayName} installé avec succès.\n${result.trim()}`;
+        let installOutput = '';
+        try {
+          installOutput = execSync(cmd, { encoding: 'utf8', timeout: 300_000, shell: 'cmd.exe' });
+        } catch (installErr) {
+          // winget peut retourner un code non-zéro même en cas de succès (déjà installé, etc.)
+          installOutput = installErr.stdout || installErr.message || '';
+          if (!installOutput.toLowerCase().includes('successfully installed') &&
+              !installOutput.toLowerCase().includes('already installed') &&
+              !installOutput.toLowerCase().includes('déjà installé') &&
+              !installOutput.toLowerCase().includes('no applicable upgrade found')) {
+            throw new Error(`Installation échouée.\n${installOutput.trim()}`);
+          }
+        }
+        // ── Vérification post-installation ──────────────────────────────
+        let verifyLine = '';
+        try {
+          const checkOut = execSync(`winget list --id "${packageId}" --accept-source-agreements 2>nul`, {
+            encoding: 'utf8', timeout: 15_000, shell: 'cmd.exe',
+          });
+          // Trouver la ligne qui contient le package ID
+          const lines = checkOut.split('\n').filter(l => l.toLowerCase().includes(packageId.toLowerCase()));
+          if (lines.length > 0) {
+            verifyLine = `✅ VÉRIFIÉ installé : ${lines[0].trim()}`;
+          } else {
+            verifyLine = `⚠️ Non trouvé dans winget list après installation (peut être normal pour certains paquets)`;
+          }
+        } catch {
+          verifyLine = '⚠️ Vérification winget list indisponible';
+        }
+        return `✅ ${displayName} installé.\n\n--- Vérification ---\n${verifyLine}\n\n--- Output winget ---\n${installOutput.trim()}`;
       }
 
       if (method === 'url') {
@@ -648,6 +676,54 @@ async function executeCommand(type, params) {
         return `✅ ${displayName} désinstallé.\n${result.trim()}`;
       }
       throw new Error(`Méthode inconnue : ${method}`);
+    }
+
+    case 'check_app': {
+      const packageId   = params.package_id;
+      const displayName = params.display_name || packageId;
+      if (!packageId) throw new Error('Paramètre manquant : package_id');
+      console.log(`   🔍 Vérification de ${packageId}...`);
+
+      // 1. winget list --id
+      let wingetResult = '';
+      let installed = false;
+      try {
+        const out = execSync(`winget list --id "${packageId}" --accept-source-agreements 2>nul`, {
+          encoding: 'utf8', timeout: 15_000, shell: 'cmd.exe',
+        });
+        const lines = out.split('\n').filter(l => l.toLowerCase().includes(packageId.toLowerCase()));
+        if (lines.length > 0) {
+          installed = true;
+          wingetResult = lines[0].trim();
+        }
+      } catch {}
+
+      // 2. Registre Windows (fallback)
+      let regResult = '';
+      if (!installed) {
+        try {
+          const regKeys = [
+            `HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall`,
+            `HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall`,
+            `HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall`,
+          ];
+          for (const key of regKeys) {
+            try {
+              const out = execSync(
+                `reg query "${key}" /s /f "${displayName}" /d 2>nul`,
+                { encoding: 'utf8', timeout: 10_000, shell: 'cmd.exe' }
+              );
+              if (out.trim()) { regResult = out.split('\n')[0].trim(); installed = true; break; }
+            } catch {}
+          }
+        } catch {}
+      }
+
+      if (installed) {
+        return `✅ ${displayName} est INSTALLÉ sur cette machine.\n\nwinget: ${wingetResult || '(trouvé via registre)'}\nRegistre: ${regResult || '(trouvé via winget)'}`;
+      } else {
+        return `❌ ${displayName} n'est PAS installé sur cette machine (ni winget list, ni registre).`;
+      }
     }
 
     case 'list_installed_apps': {

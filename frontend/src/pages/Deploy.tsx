@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { deployAPI, deviceAPI, AppDeployParams } from '../api/client';
+import { deployAPI, deviceAPI, commandAPI, AppDeployParams } from '../api/client';
 
 // ─── Catalogue d'applications ─────────────────────────────────────────────────
 interface CatalogApp {
@@ -86,6 +86,8 @@ export default function Deploy() {
   const [deployResult, setDeployResult] = useState<string | null>(null);
   const [history, setHistory]           = useState<DeployRecord[]>([]);
   const [historyLoading, setHistoryLoading] = useState(true);
+  const [expandedRow, setExpandedRow]       = useState<string | null>(null);
+  const [verifying, setVerifying]           = useState<string | null>(null);
   const [customUrl, setCustomUrl]       = useState('');
   const [customName, setCustomName]     = useState('');
   const [customArgs, setCustomArgs]     = useState('');
@@ -157,6 +159,19 @@ export default function Deploy() {
     } catch {
       setDeployResult(`❌ Erreur lors de l'envoi du déploiement.`);
     } finally { setDeploying(false); }
+  };
+
+  // Envoyer une commande check_app pour un déploiement de l'historique
+  const handleVerify = async (h: DeployRecord) => {
+    if (!h.params?.package_id) return;
+    setVerifying(h.id);
+    try {
+      await commandAPI.queue(h.device_id, {
+        command_type: 'check_app',
+        params: { package_id: h.params.package_id, display_name: h.params.display_name || h.params.package_id },
+      });
+      setTimeout(loadHistory, 4000);
+    } finally { setVerifying(null); }
   };
 
   const onlineDevices  = devices.filter(d => d.status === 'online');
@@ -354,34 +369,76 @@ export default function Deploy() {
                   <th className="px-5 py-3">Type</th>
                   <th className="px-5 py-3">Statut</th>
                   <th className="px-5 py-3">Date</th>
-                  <th className="px-5 py-3">Résultat</th>
+                  <th className="px-5 py-3">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-50">
-                {history.map(h => (
-                  <tr key={h.id} className="hover:bg-gray-50">
-                    <td className="px-5 py-3 font-medium text-gray-900">
-                      {h.params?.display_name || h.params?.package_id || '—'}
-                    </td>
-                    <td className="px-5 py-3 text-gray-600">{h.device_name}</td>
-                    <td className="px-5 py-3">
-                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${h.command_type === 'install_app' ? 'bg-blue-100 text-blue-700' : 'bg-orange-100 text-orange-700'}`}>
-                        {h.command_type === 'install_app' ? '📦 install' : '🗑 uninstall'}
-                      </span>
-                    </td>
-                    <td className="px-5 py-3"><StatusBadge status={h.status} /></td>
-                    <td className="px-5 py-3 text-gray-400 text-xs">
-                      {new Date(h.created_at).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
-                    </td>
-                    <td className="px-5 py-3 max-w-xs">
-                      {h.output ? (
-                        <span className="text-xs text-gray-500 truncate block max-w-[200px]" title={h.output}>
-                          {h.output.substring(0, 60)}{h.output.length > 60 ? '…' : ''}
-                        </span>
-                      ) : '—'}
-                    </td>
-                  </tr>
-                ))}
+              <tbody className="divide-y divide-gray-100">
+                {history.map(h => {
+                  const isExpanded = expandedRow === h.id;
+                  // Détecter si la vérif est positive/négative depuis l'output
+                  const outputVerified = h.output?.includes('VÉRIFIÉ installé') || h.output?.includes('est INSTALLÉ');
+                  const outputFailed   = h.output?.includes('n\'est PAS installé') || h.status === 'failed';
+                  return (
+                    <>
+                      <tr key={h.id} className={`hover:bg-gray-50 ${isExpanded ? 'bg-blue-50' : ''}`}>
+                        <td className="px-5 py-3 font-medium text-gray-900">
+                          {h.params?.display_name || h.params?.package_id || '—'}
+                        </td>
+                        <td className="px-5 py-3 text-gray-600">{h.device_name}</td>
+                        <td className="px-5 py-3">
+                          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${h.command_type === 'install_app' ? 'bg-blue-100 text-blue-700' : 'bg-orange-100 text-orange-700'}`}>
+                            {h.command_type === 'install_app' ? '📦 install' : '🗑 uninstall'}
+                          </span>
+                        </td>
+                        <td className="px-5 py-3">
+                          <div className="flex items-center gap-2">
+                            <StatusBadge status={h.status} />
+                            {h.status === 'success' && outputVerified && (
+                              <span className="text-xs text-green-600 font-semibold">✓ vérifié</span>
+                            )}
+                            {h.status === 'success' && outputFailed && (
+                              <span className="text-xs text-orange-500 font-semibold">⚠️ non vérifié</span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-5 py-3 text-gray-400 text-xs">
+                          {new Date(h.created_at).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                        </td>
+                        <td className="px-5 py-3">
+                          <div className="flex items-center gap-2">
+                            {h.output && (
+                              <button onClick={() => setExpandedRow(isExpanded ? null : h.id)}
+                                className="text-xs text-blue-600 hover:underline font-medium">
+                                {isExpanded ? '▲ Masquer' : '▼ Output'}
+                              </button>
+                            )}
+                            {h.params?.package_id && (
+                              <button
+                                onClick={() => handleVerify(h)}
+                                disabled={verifying === h.id}
+                                className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 px-2 py-1 rounded font-medium transition disabled:opacity-50">
+                                {verifying === h.id ? '⏳' : '🔍 Vérifier'}
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                      {isExpanded && h.output && (
+                        <tr key={`${h.id}-expanded`} className="bg-gray-50">
+                          <td colSpan={6} className="px-5 py-3">
+                            <pre className={`text-xs rounded-lg p-3 whitespace-pre-wrap font-mono max-h-64 overflow-y-auto border ${
+                              outputVerified ? 'bg-green-50 border-green-200 text-green-800' :
+                              outputFailed   ? 'bg-red-50 border-red-200 text-red-800' :
+                                               'bg-gray-900 border-gray-700 text-green-400'
+                            }`}>
+                              {h.output}
+                            </pre>
+                          </td>
+                        </tr>
+                      )}
+                    </>
+                  );
+                })}
               </tbody>
             </table>
           </div>
