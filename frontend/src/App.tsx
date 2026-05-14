@@ -1,7 +1,8 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useMsalAuthentication } from '@azure/msal-react';
 import { useApiClient } from './hooks/useApi';
+import { Login } from './pages/Login';
 import Layout from './components/Layout';
 import Dashboard from './pages/Dashboard';
 import Devices from './pages/Devices';
@@ -11,6 +12,13 @@ import Alerts from './pages/Alerts';
 function App() {
   const { isLoading, isAuthenticated } = useMsalAuthentication('redirect');
   const { isReady } = useApiClient();
+  const [hasManualAuth, setHasManualAuth] = useState(false);
+
+  // Check for manual auth token in localStorage
+  useEffect(() => {
+    const token = localStorage.getItem('auth_token');
+    setHasManualAuth(!!token);
+  }, []);
 
   if (isLoading) {
     return (
@@ -23,15 +31,17 @@ function App() {
     );
   }
 
-  if (!isAuthenticated) {
+  // Show login page if no MSAL auth and no manual auth
+  const isUserAuthenticated = isAuthenticated || hasManualAuth;
+
+  if (!isUserAuthenticated) {
     return (
-      <div className="flex items-center justify-center h-screen bg-gradient-to-br from-blue-600 to-blue-800">
-        <div className="text-center">
-          <h1 className="text-4xl font-bold text-white mb-4">RMM Platform</h1>
-          <p className="text-blue-200 mb-8">Remote Monitoring & Management System</p>
-          <p className="text-blue-200">Please login to continue...</p>
-        </div>
-      </div>
+      <BrowserRouter>
+        <Routes>
+          <Route path="/" element={<Login />} />
+          <Route path="*" element={<Navigate to="/" />} />
+        </Routes>
+      </BrowserRouter>
     );
   }
 

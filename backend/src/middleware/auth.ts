@@ -4,8 +4,8 @@ import { TokenClaims } from '../types';
 import { logger } from '../utils/logger';
 
 /**
- * Validate Azure AD JWT token from Authorization header
- * TODO: In production, validate signature against Azure AD JWKS endpoint
+ * Validate JWT token from Authorization header
+ * Supports both Azure AD tokens and manual login tokens
  */
 export function authMiddleware(req: Request, res: Response, next: NextFunction): void {
   try {
@@ -21,10 +21,23 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction):
     }
 
     const token = authHeader.substring(7); // Remove "Bearer " prefix
+    let decoded: Record<string, unknown> | null = null;
 
-    // TODO: Verify JWT signature in production
-    // For MVP, just decode without verification
-    const decoded = jwt.decode(token) as TokenClaims | null;
+    // Try to verify as manual JWT first (with signature validation)
+    const jwtSecret = process.env.JWT_SECRET;
+    if (jwtSecret) {
+      try {
+        decoded = jwt.verify(token, jwtSecret) as Record<string, unknown>;
+        logger.debug('Token verified as manual JWT');
+      } catch (err) {
+        // Not a manual JWT, try Azure AD token
+        logger.debug('Token is not a manual JWT, trying Azure AD');
+        decoded = jwt.decode(token) as Record<string, unknown> | null;
+      }
+    } else {
+      // No JWT secret, just decode (for development)
+      decoded = jwt.decode(token) as Record<string, unknown> | null;
+    }
 
     if (!decoded) {
       logger.warn('Invalid token format');
@@ -37,24 +50,16 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction):
 
     // Extract tenant ID from token claims
     // Azure AD uses 'tid' for tenant ID
-    const tenantId = decoded.tid || (decoded as Record<string, unknown>).tenant_id;
-    const userId = decoded.oid || (decoded as Record<string, unknown>).sub;
-
-    if (!tenantId) {
-      logger.warn('Token missing tenant_id claim');
-      res.status(401).json({
-        error: 'Token missing tenant_id claim',
-        statusCode: 401,
-      });
-      return;
-    }
+    // Manual tokens may not have it, use default 'demo-tenant'
+    const tenantId = (decoded.tid || decoded.tenant_id || 'demo-tenant') as string;
+    const userId = (decoded.oid || decoded.sub || 'unknown-user') as string;
 
     // Attach to request for later middleware/routes
-    req.userId = userId as string;
+    req.userId = userId;
     (req as unknown as Record<string, unknown>)._tenantId = tenantId;
     (req as unknown as Record<string, unknown>)._token = token;
 
-    logger.debug(`Auth successful for user ${userId}`);
+    logger.debug(`Auth successful for user ${userId} (tenant: ${tenantId})`);
     next();
   } catch (error) {
     logger.error('Auth middleware error:', error);

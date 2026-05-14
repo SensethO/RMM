@@ -7,6 +7,7 @@ import { tenantMiddleware } from './middleware/tenant';
 import devicesRouter from './routes/devices';
 import commandsRouter from './routes/commands';
 import telemetryRouter from './routes/telemetry';
+import authRouter from './routes/auth';
 import './types/express'; // Import type extensions
 
 dotenv.config();
@@ -43,6 +44,9 @@ app.get('/api/health', (_req: Request, res: Response) => {
   });
 });
 
+// Auth routes (no auth required)
+app.use('/api/auth', authRouter);
+
 // Authentication and tenant extraction middleware
 app.use('/api/', authMiddleware);
 app.use('/api/', tenantMiddleware);
@@ -77,6 +81,7 @@ app.listen(PORT, () => {
   logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
   logger.info('Endpoints:');
   logger.info('  GET  /api/health                          - Health check');
+  logger.info('  POST /api/auth/login                      - Login (demo: admin/demo123)');
   logger.info('  POST /api/devices/register                - Register device');
   logger.info('  GET  /api/devices                         - List devices');
   logger.info('  GET  /api/devices/:id                     - Get device');

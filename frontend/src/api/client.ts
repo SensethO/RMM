@@ -29,8 +29,15 @@ export function initializeApiClient(getMsalToken: () => Promise<string>): AxiosI
   apiClient.interceptors.request.use(
     async (config) => {
       try {
-        const token = await getMsalToken();
-        config.headers.Authorization = `Bearer ${token}`;
+        // Check for manual auth token first (from login form)
+        const manualToken = localStorage.getItem('auth_token');
+        if (manualToken) {
+          config.headers.Authorization = `Bearer ${manualToken}`;
+        } else {
+          // Fall back to MSAL token
+          const token = await getMsalToken();
+          config.headers.Authorization = `Bearer ${token}`;
+        }
       } catch (error) {
         console.error('Failed to get token:', error);
       }
@@ -44,8 +51,10 @@ export function initializeApiClient(getMsalToken: () => Promise<string>): AxiosI
     (response) => response,
     (error: AxiosError) => {
       if (error.response?.status === 401) {
+        // Clear manual auth token if it exists
+        localStorage.removeItem('auth_token');
         // Token expired - user needs to login again
-        window.location.href = '/login';
+        window.location.href = '/';
       }
       return Promise.reject(error);
     }
