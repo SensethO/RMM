@@ -42,7 +42,7 @@ app.use((req, res, next) => {
 
 // ─── Health ──────────────────────────────────────────────────────────────────
 // ─── Versions ────────────────────────────────────────────────────────────────
-const EXPECTED_AGENT_VERSION = '1.1.0';
+const EXPECTED_AGENT_VERSION = '1.1.1';
 const APP_VERSION             = '1.1.0';
 
 app.get('/api/system/info', (_req, res) => {
@@ -489,6 +489,26 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
   const message = err instanceof Error ? err.message : String(err);
   logger.error('Unhandled error:', message);
   res.status(500).json({ error: message || 'Internal server error', statusCode: 500 });
+});
+
+// ─── Heartbeat watchdog : marque offline les devices silencieux > 5 min ──────
+app.post('/api/system/watchdog', async (_req, res) => {
+  try {
+    const supabase = getSupabase();
+    const cutoff = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    const { data, error } = await supabase
+      .from('devices')
+      .update({ status: 'offline', updated_at: new Date().toISOString() })
+      .eq('status', 'online')
+      .lt('last_seen', cutoff)
+      .select('device_name');
+    if (error) { res.status(500).json({ error: error.message }); return; }
+    const names = (data || []).map((d: Record<string, unknown>) => d.device_name);
+    if (names.length) logger.info('Watchdog marked offline:', names);
+    res.json({ marked_offline: names, cutoff });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : 'error' });
+  }
 });
 
 // ─── Vercel serverless export ─────────────────────────────────────────────────

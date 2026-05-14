@@ -5,7 +5,7 @@
  * Usage: node agent.js
  */
 
-const AGENT_VERSION = '1.1.0';
+const AGENT_VERSION = '1.1.1';
 const AGENT_RAW_URL = 'https://raw.githubusercontent.com/SensethO/RMM/master/agent-windows/agent.js';
 
 const https = require('https');
@@ -102,7 +102,7 @@ function getRamPercent() {
   return Math.round(((total - free) / total) * 100);
 }
 
-// ─── Public IP ───────────────────────────────────────────────────────────────
+// ─── Public IP ──────────────────────────────────────────────────���────────────
 function fetchPublicIp() {
   return new Promise((resolve) => {
     https.get('https://api.ipify.org?format=json', (res) => {
@@ -170,7 +170,7 @@ function getDeviceId() {
   return `WIN-${hostname.toUpperCase()}-${mac}`.substring(0, 50);
 }
 
-// ─── Fetch config from backend ────────────────────────────────────────────────
+// ─── Fetch config from backend ───────────────────────────���────────────────────
 async function fetchConfig(silent = false) {
   try {
     const res = await request('GET', `/api/devices/${deviceDbId}/config`, null);
@@ -574,9 +574,14 @@ async function executeCommand(type, params) {
       // Écrire la nouvelle version
       fs.writeFileSync(selfPath, content, 'utf8');
       // Lancer la nouvelle version en arrière-plan puis quitter
-      const { spawn } = require('child_process');
-      spawn(process.execPath, [selfPath], { detached: true, stdio: 'inherit' }).unref();
-      setTimeout(() => process.exit(0), 500);
+      const { exec } = require('child_process');
+      exec(`start "" /b "${process.execPath}" "${selfPath}"`, { shell: 'cmd.exe' }, (err) => {
+        if (err) {
+          const { spawn } = require('child_process');
+          spawn(process.execPath, [selfPath], { detached: true, stdio: 'ignore' }).unref();
+        }
+      });
+      setTimeout(() => process.exit(0), 1500);
       return `✅ Mise à jour téléchargée (${content.length} octets). Redémarrage en cours...`;
     }
 
@@ -610,9 +615,17 @@ async function checkForUpdate() {
     fs.writeFileSync(path.resolve(__filename), content, 'utf8');
 
     console.log('   ✅ Fichier mis à jour. Redémarrage...');
-    const { spawn } = require('child_process');
-    spawn(process.execPath, [path.resolve(__filename)], { detached: true, stdio: 'inherit' }).unref();
-    setTimeout(() => process.exit(0), 500);
+    // Sur Windows : start /b lance un nouveau process indépendant du terminal courant
+    const { exec } = require('child_process');
+    const scriptPath = path.resolve(__filename);
+    exec(`start "" /b "${process.execPath}" "${scriptPath}"`, { shell: 'cmd.exe' }, (err) => {
+      if (err) {
+        // Fallback : spawn détaché sans héritage stdio
+        const { spawn } = require('child_process');
+        spawn(process.execPath, [scriptPath], { detached: true, stdio: 'ignore' }).unref();
+      }
+    });
+    setTimeout(() => process.exit(0), 1500);
   } catch (e) {
     // Silencieux : pas de mise à jour si GitHub injoignable
   }

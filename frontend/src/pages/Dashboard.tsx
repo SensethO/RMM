@@ -43,6 +43,19 @@ export default function Dashboard() {
     };
 
     fetchDevices();
+
+    // Watchdog : marque offline les devices silencieux > 5 min, puis rafraîchit
+    const BASE = import.meta.env.VITE_API_URL || 'https://backend-xi-one-36.vercel.app';
+    const token = localStorage.getItem('auth_token');
+    const runWatchdog = () =>
+      fetch(`${BASE}/api/system/watchdog`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      }).then(() => fetchDevices()).catch(() => {});
+
+    runWatchdog(); // immédiat
+    const wdTimer = setInterval(runWatchdog, 5 * 60 * 1000);
+    return () => clearInterval(wdTimer);
   }, [isReady]);
 
   const getStatusColor = (status: string) => {
