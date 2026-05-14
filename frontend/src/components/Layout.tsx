@@ -19,6 +19,7 @@ export default function Layout({ children }: LayoutProps) {
     { href: '/devices', label: 'Devices', icon: '💻' },
     { href: '/commands', label: 'Commands', icon: '⚙️' },
     { href: '/alerts', label: 'Alerts', icon: '🚨' },
+    { href: '/monitor', label: 'Monitor', icon: '📡' },
     { href: '/versions', label: 'Versions', icon: '🔖' },
     { href: '/settings', label: 'Settings', icon: '⚙️' },
   ];
