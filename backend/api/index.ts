@@ -482,6 +482,43 @@ app.patch('/api/alerts/:id/acknowledge', async (req: Request, res: Response) => 
   } catch (err) { logger.error('Acknowledge alert error:', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
+// ─── Deploy routes ────────────────────────────────────────────────────────────
+
+// GET /api/deploy/history — historique des install_app / uninstall_app sur tout le parc
+app.get('/api/deploy/history', async (req: Request, res: Response) => {
+  try {
+    if (!req.tenant) { res.status(401).json({ error: 'Missing tenant context' }); return; }
+    const limit = parseInt(req.query.limit as string) || 100;
+    const supabase = getSupabase();
+    const { data: commands, error } = await supabase
+      .from('commands')
+      .select('id, device_id, command_type, params, status, output, created_at, executed_at, updated_at')
+      .eq('tenant_id', req.tenant.id)
+      .in('command_type', ['install_app', 'uninstall_app'])
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    if (error) { logger.error('Deploy history:', error); res.status(500).json({ error: 'Failed to fetch deploy history' }); return; }
+
+    // Joindre les noms des devices
+    const deviceIds = [...new Set((commands || []).map(c => c.device_id))];
+    let devicesMap: Record<string, string> = {};
+    if (deviceIds.length) {
+      const { data: devices } = await supabase
+        .from('devices')
+        .select('id, device_name')
+        .in('id', deviceIds);
+      (devices || []).forEach(d => { devicesMap[d.id] = d.device_name; });
+    }
+
+    const enriched = (commands || []).map(c => ({
+      ...c,
+      device_name: devicesMap[c.device_id] || c.device_id,
+    }));
+
+    res.json({ data: enriched, count: enriched.length, statusCode: 200 });
+  } catch (err) { logger.error('Deploy history error:', err); res.status(500).json({ error: 'Internal server error' }); }
+});
+
 // ─── 404 & Error handlers ─────────────────────────────────────────────────────
 app.use((_req, res) => res.status(404).json({ error: 'Endpoint not found', statusCode: 404 }));
 

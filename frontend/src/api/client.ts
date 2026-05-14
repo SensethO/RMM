@@ -177,6 +177,50 @@ export const configAPI = {
     getApiClient().delete<ApiResponse<null>>(`/api/devices/${deviceId}/config`),
 };
 
+// Deploy API
+export interface AppDeployParams {
+  method: 'winget' | 'url';
+  package_id?: string;
+  url?: string;
+  install_args?: string;
+  display_name: string;
+}
+
+export const deployAPI = {
+  // Envoie install_app à une liste de devices (en parallèle)
+  dispatch: (deviceIds: string[], params: AppDeployParams) =>
+    Promise.all(
+      deviceIds.map(id =>
+        getApiClient().post<ApiResponse<Record<string, unknown>>>(`/api/commands/${id}`, {
+          command_type: 'install_app',
+          params,
+        })
+      )
+    ),
+
+  // Désinstaller sur une liste de devices
+  dispatchUninstall: (deviceIds: string[], params: { package_id: string; display_name: string }) =>
+    Promise.all(
+      deviceIds.map(id =>
+        getApiClient().post<ApiResponse<Record<string, unknown>>>(`/api/commands/${id}`, {
+          command_type: 'uninstall_app',
+          params: { method: 'winget', ...params },
+        })
+      )
+    ),
+
+  // Lister les apps installées d'un device
+  listApps: (deviceId: string) =>
+    getApiClient().post<ApiResponse<Record<string, unknown>>>(`/api/commands/${deviceId}`, {
+      command_type: 'list_installed_apps',
+      params: {},
+    }),
+
+  // Historique des déploiements de tout le parc
+  history: (limit = 100) =>
+    getApiClient().get<ApiResponse<Record<string, unknown>[]>>('/api/deploy/history', { params: { limit } }),
+};
+
 // Health check
 export const health = {
   check: () => getApiClient().get<ApiResponse<Record<string, unknown>>>('/api/health'),

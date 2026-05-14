@@ -11,6 +11,7 @@ import Settings from './pages/Settings';
 import DeviceDetail from './pages/DeviceDetail';
 import Versions from './pages/Versions';
 import Monitor from './pages/Monitor';
+import Deploy from './pages/Deploy';
 
 function App() {
   const { isReady } = useApiClient();
@@ -72,6 +73,7 @@ function App() {
           <Route path="/settings" element={<Settings />} />
           <Route path="/versions" element={<Versions />} />
           <Route path="/monitor" element={<Monitor />} />
+          <Route path="/deploy" element={<Deploy />} />
           <Route path="*" element={<Navigate to="/" />} />
         </Routes>
       </Layout>

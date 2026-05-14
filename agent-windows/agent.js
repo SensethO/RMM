@@ -102,7 +102,7 @@ function getRamPercent() {
   return Math.round(((total - free) / total) * 100);
 }
 
-// ─── Public IP ──────────────────────────────────────────────────���────────────
+// ─── Public IP ──────────────────────────────────────────────────�����────────────
 function fetchPublicIp() {
   return new Promise((resolve) => {
     https.get('https://api.ipify.org?format=json', (res) => {
@@ -170,7 +170,7 @@ function getDeviceId() {
   return `WIN-${hostname.toUpperCase()}-${mac}`.substring(0, 50);
 }
 
-// ─── Fetch config from backend ───────────────────────────���────────────────────
+// ─── Fetch config from backend ─────────────────────────���─���────────────────────
 async function fetchConfig(silent = false) {
   try {
     const res = await request('GET', `/api/devices/${deviceDbId}/config`, null);
@@ -583,6 +583,88 @@ async function executeCommand(type, params) {
       });
       setTimeout(() => process.exit(0), 1500);
       return `✅ Mise à jour téléchargée (${content.length} octets). Redémarrage en cours...`;
+    }
+
+    // ─── Déploiement logiciels ────────────────────────────────────────────────
+    case 'install_app': {
+      const method      = params.method || 'winget';
+      const packageId   = params.package_id;
+      const installUrl  = params.url;
+      const installArgs = params.install_args;
+      const displayName = params.display_name || packageId || installUrl || 'Application';
+
+      if (method === 'winget') {
+        if (!packageId) throw new Error('Paramètre manquant : package_id');
+        console.log(`   📦 winget install ${packageId}...`);
+        const cmd = `winget install --id "${packageId}" --silent --accept-package-agreements --accept-source-agreements --disable-interactivity`;
+        const result = execSync(cmd, { encoding: 'utf8', timeout: 300_000, shell: 'cmd.exe' });
+        return `✅ ${displayName} installé avec succès.\n${result.trim()}`;
+      }
+
+      if (method === 'url') {
+        if (!installUrl) throw new Error('Paramètre manquant : url');
+        const fs   = require('fs');
+        const path = require('path');
+        // Détecter l'extension depuis l'URL
+        const cleanUrl = installUrl.split('?')[0];
+        const ext = cleanUrl.toLowerCase().endsWith('.msi') ? '.msi' : '.exe';
+        const tmpFile = path.join(os.tmpdir(), `rmm-install-${Date.now()}${ext}`);
+
+        console.log(`   📥 Téléchargement : ${installUrl}`);
+        await new Promise((resolve, reject) => {
+          const urlObj = new URL(installUrl);
+          const driver = urlObj.protocol === 'https:' ? require('https') : require('http');
+          const file   = fs.createWriteStream(tmpFile);
+          driver.get(installUrl, res => {
+            if (res.statusCode !== 200) { file.close(); return reject(new Error(`HTTP ${res.statusCode}`)); }
+            res.pipe(file);
+            file.on('finish', () => { file.close(); resolve(); });
+          }).on('error', err => { try { file.close(); fs.unlinkSync(tmpFile); } catch {} reject(err); });
+        });
+
+        console.log(`   ▶ Installation de ${tmpFile}...`);
+        const args = installArgs || (ext === '.msi' ? '/qn /norestart' : '/S');
+        const installCmd = ext === '.msi'
+          ? `msiexec /i "${tmpFile}" ${args}`
+          : `"${tmpFile}" ${args}`;
+        const result = execSync(installCmd, { encoding: 'utf8', timeout: 300_000, shell: 'cmd.exe' });
+        try { fs.unlinkSync(tmpFile); } catch {}
+        return `✅ ${displayName} installé depuis URL.\n${result.trim()}`;
+      }
+
+      throw new Error(`Méthode inconnue : ${method} (valeurs : winget, url)`);
+    }
+
+    case 'uninstall_app': {
+      const method      = params.method || 'winget';
+      const packageId   = params.package_id;
+      const displayName = params.display_name || packageId || 'Application';
+
+      if (method === 'winget') {
+        if (!packageId) throw new Error('Paramètre manquant : package_id');
+        console.log(`   🗑 winget uninstall ${packageId}...`);
+        const cmd = `winget uninstall --id "${packageId}" --silent --disable-interactivity`;
+        const result = execSync(cmd, { encoding: 'utf8', timeout: 120_000, shell: 'cmd.exe' });
+        return `✅ ${displayName} désinstallé.\n${result.trim()}`;
+      }
+      throw new Error(`Méthode inconnue : ${method}`);
+    }
+
+    case 'list_installed_apps': {
+      console.log('   📋 Récupération des applications installées...');
+      try {
+        const result = execSync('winget list --accept-source-agreements 2>nul', {
+          encoding: 'utf8', timeout: 30_000, shell: 'cmd.exe',
+        });
+        return result.trim();
+      } catch {
+        // Fallback PowerShell
+        const result = execSync(
+          'powershell -Command "Get-Package | Select-Object Name,Version | Sort-Object Name | Format-Table -AutoSize | Out-String -Width 120"',
+          { encoding: 'utf8', timeout: 30_000 }
+        );
+        return result.trim();
+      }
     }
 
     default:
