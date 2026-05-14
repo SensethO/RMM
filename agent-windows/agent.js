@@ -319,7 +319,7 @@ async function pollCommands() {
     let success = true;
 
     try {
-      output = executeCommand(cmd.command_type, cmd.params || {});
+      output = await executeCommand(cmd.command_type, cmd.params || {});
       console.log(`   ✅ Succès: ${output.substring(0, 80)}`);
     } catch (err) {
       output   = err.message;
@@ -337,7 +337,7 @@ async function pollCommands() {
   }
 }
 
-function executeCommand(type, params) {
+async function executeCommand(type, params) {
   switch (type) {
     case 'ping':
       return execSync(`ping -n 1 ${params.host || '8.8.8.8'}`, { encoding: 'utf8', timeout: 10000 });
@@ -437,6 +437,34 @@ function executeCommand(type, params) {
       } catch (e) {
         return `Erreur disk_info: ${e.message}`;
       }
+    }
+
+    case 'self_update': {
+      // Télécharge la dernière version de l'agent depuis GitHub et remplace le fichier
+      const fs       = require('fs');
+      const path     = require('path');
+      const rawUrl   = params.url ||
+        'https://raw.githubusercontent.com/SensethO/RMM/master/agent-windows/agent.js';
+      const selfPath = path.resolve(__filename);
+
+      const content = await new Promise((resolve, reject) => {
+        const url    = new URL(rawUrl);
+        const driver = url.protocol === 'https:' ? require('https') : require('http');
+        let data = '';
+        driver.get(rawUrl, res => {
+          if (res.statusCode !== 200) return reject(new Error(`HTTP ${res.statusCode}`));
+          res.on('data', c => data += c);
+          res.on('end', () => resolve(data));
+        }).on('error', reject);
+      });
+
+      // Écrire la nouvelle version
+      fs.writeFileSync(selfPath, content, 'utf8');
+      // Lancer la nouvelle version en arrière-plan puis quitter
+      const { spawn } = require('child_process');
+      spawn(process.execPath, [selfPath], { detached: true, stdio: 'inherit' }).unref();
+      setTimeout(() => process.exit(0), 500);
+      return `✅ Mise à jour téléchargée (${content.length} octets). Redémarrage en cours...`;
     }
 
     default:
