@@ -1,7 +1,7 @@
 @echo off
-:: Installe l'agent RMM comme tâche planifiée Windows
-:: Démarre au boot, redémarre automatiquement si crash
-:: Doit être exécuté en tant qu'Administrateur
+:: Installe l'agent RMM comme tache planifiee Windows
+:: Demarre au boot, redemarrage gere par start-agent.bat (boucle watchdog)
+:: Doit etre execute en tant qu'Administrateur
 
 title Installation RMM Agent - Service
 cd /d "%~dp0"
@@ -13,31 +13,21 @@ if "%NODE_EXE%"=="" (
     pause
     exit /b 1
 )
-echo Node.js trouvé : %NODE_EXE%
+echo Node.js trouve : %NODE_EXE%
 
-set AGENT_PATH=%~dp0agent.js
 set TASK_NAME=RMM-Agent
 set WRAPPER=%~dp0start-agent.bat
 
 echo.
-echo Installation de la tâche planifiée "%TASK_NAME%"...
-echo   Script  : %WRAPPER%
-echo   Node    : %NODE_EXE%
+echo Installation de la tache planifiee "%TASK_NAME%"...
+echo   Script : %WRAPPER%
 echo.
 
-:: Supprimer l'ancienne tâche si elle existe
+:: Supprimer l'ancienne tache si elle existe
 schtasks /delete /tn "%TASK_NAME%" /f > nul 2>&1
 
-:: Créer la tâche : au démarrage de Windows, sous le compte SYSTEM, niveau élevé
-schtasks /create ^
-  /tn "%TASK_NAME%" ^
-  /tr "\"%WRAPPER%\"" ^
-  /sc onstart ^
-  /delay 0000:30 ^
-  /ru "SYSTEM" ^
-  /rl HIGHEST ^
-  /f ^
-  /settings /restartcount:99 /restartinterval:PT1M
+:: Creer la tache : au demarrage de Windows, 30s de delai, compte SYSTEM
+schtasks /create /tn "%TASK_NAME%" /tr "\"%WRAPPER%\"" /sc onstart /delay 0000:30 /ru "SYSTEM" /rl HIGHEST /f
 
 if %ERRORLEVEL% EQU 0 (
     echo.
@@ -47,6 +37,8 @@ if %ERRORLEVEL% EQU 0 (
     echo Demarrage immediat...
     schtasks /run /tn "%TASK_NAME%"
     echo L'agent tourne maintenant en arriere-plan.
+    echo.
+    echo Pour verifier : schtasks /query /tn "%TASK_NAME%" /fo list
 ) else (
     echo.
     echo ERREUR lors de l'installation. Verifiez les droits administrateur.
