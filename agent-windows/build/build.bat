@@ -41,8 +41,8 @@ for /f "tokens=*" %%v in ('pkg --version 2^>nul') do echo   pkg    : %%v
 where wix >nul 2>&1
 if %ERRORLEVEL% NEQ 0 (
     echo   WiX non trouvé - installation via dotnet...
-    dotnet tool install -g wix
-    wix extension add WixToolset.Util.wixext
+    dotnet nuget add source https://api.nuget.org/v3/index.json --name nuget.org 2>nul
+    dotnet tool install -g wix --version 5.0.2
 )
 echo   WiX    : OK
 echo.
@@ -73,7 +73,6 @@ echo [3/4] Construction du MSI (WiX)...
 cd build
 
 wix build installer.wxs ^
-    -ext WixToolset.Util.wixext ^
     -out rmm-agent-setup.msi ^
     -arch x64
 
