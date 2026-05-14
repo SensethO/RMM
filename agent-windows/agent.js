@@ -5,6 +5,9 @@
  * Usage: node agent.js
  */
 
+const AGENT_VERSION = '1.0.6';
+const AGENT_RAW_URL = 'https://raw.githubusercontent.com/SensethO/RMM/master/agent-windows/agent.js';
+
 const https = require('https');
 const http  = require('http');
 const os    = require('os');
@@ -580,6 +583,39 @@ async function executeCommand(type, params) {
   }
 }
 
+// ─── Auto-update ─────────────────────────────────────────────────────────────
+async function checkForUpdate() {
+  try {
+    const content = await new Promise((resolve, reject) => {
+      https.get(AGENT_RAW_URL, res => {
+        if (res.statusCode !== 200) return reject(new Error(`HTTP ${res.statusCode}`));
+        let data = '';
+        res.on('data', c => data += c);
+        res.on('end', () => resolve(data));
+      }).on('error', reject);
+    });
+
+    // Extraire la version depuis le fichier distant
+    const match = content.match(/AGENT_VERSION\s*=\s*'([^']+)'/);
+    const remoteVersion = match?.[1];
+    if (!remoteVersion || remoteVersion === AGENT_VERSION) return; // déjà à jour
+
+    console.log(`\n🔄 Nouvelle version détectée : ${AGENT_VERSION} → ${remoteVersion}`);
+    console.log('   Mise à jour en cours...');
+
+    const fs   = require('fs');
+    const path = require('path');
+    fs.writeFileSync(path.resolve(__filename), content, 'utf8');
+
+    console.log('   ✅ Fichier mis à jour. Redémarrage...');
+    const { spawn } = require('child_process');
+    spawn(process.execPath, [path.resolve(__filename)], { detached: true, stdio: 'inherit' }).unref();
+    setTimeout(() => process.exit(0), 500);
+  } catch (e) {
+    // Silencieux : pas de mise à jour si GitHub injoignable
+  }
+}
+
 // ─── Main ────────────────────────────────────────────────────────────────────
 async function main() {
   console.log('╔════════════════════════════════════════╗');
@@ -612,10 +648,14 @@ async function main() {
       if (changed) restartTimers();
     }, 5 * 60 * 1000);
 
-    console.log(`\n🟢 Agent actif !`);
+    console.log(`\n🟢 Agent actif ! (v${AGENT_VERSION})`);
     console.log(`   Télémetrie toutes les ${agentConfig.telemetryInterval}s`);
     console.log(`   Commandes toutes les  ${agentConfig.pollInterval}s`);
     console.log(`   Ctrl+C pour arrêter\n`);
+
+    // Vérification de mise à jour au démarrage puis toutes les heures
+    await checkForUpdate();
+    setInterval(checkForUpdate, 60 * 60 * 1000);
 
   } catch (err) {
     console.error('❌ Erreur fatale:', err.message);
