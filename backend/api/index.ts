@@ -5,6 +5,7 @@ import dotenv from 'dotenv';
 import { logger } from '../dist/utils/logger.js';
 import { authMiddleware } from '../dist/middleware/auth.js';
 import { tenantMiddleware } from '../dist/middleware/tenant.js';
+import authRouter from '../dist/routes/auth.js';
 import devicesRouter from '../dist/routes/devices.js';
 import commandsRouter from '../dist/routes/commands.js';
 import telemetryRouter from '../dist/routes/telemetry.js';
@@ -42,6 +43,9 @@ app.get('/api/health', (_req, res) => {
     environment: process.env.NODE_ENV || 'development',
   });
 });
+
+// Auth routes (no auth required)
+app.use('/api/auth', authRouter);
 
 // Authentication and tenant extraction middleware
 app.use('/api/', authMiddleware);

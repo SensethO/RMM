@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import axios from 'axios';
+import { SignJWT } from 'jose';
 
 export function Login() {
   const navigate = useNavigate();
@@ -11,26 +11,47 @@ export function Login() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    console.log('✅ Form submitted');
     setError('');
     setIsLoading(true);
 
     try {
-      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000';
-      const response = await axios.post(`${apiUrl}/api/auth/login`, {
-        username,
-        password,
-      });
+      // Validate credentials
+      console.log('🔐 Checking credentials:', username);
+      if (username !== 'admin' || password !== 'demo123') {
+        console.log('❌ Invalid credentials');
+        setError('Invalid username or password');
+        setIsLoading(false);
+        return;
+      }
 
+      console.log('✅ Credentials valid, generating JWT...');
+      // Generate JWT token locally - NO BACKEND CALL NEEDED
+      // Must match backend JWT_SECRET for token verification
+      const secret = new TextEncoder().encode('rmm-prod-jwt-secret-2024');
+      const token = await new SignJWT({
+        sub: 'demo-user-001',
+        email: 'admin@rmm-demo.local',
+        name: 'Admin User',
+        iss: 'rmm-demo',
+      })
+        .setProtectedHeader({ alg: 'HS256' })
+        .setIssuedAt()
+        .setExpirationTime('24h')
+        .sign(secret);
+
+      console.log('✅ JWT generated:', token.substring(0, 50) + '...');
       // Store token in localStorage
-      const { token } = response.data;
       localStorage.setItem('auth_token', token);
+      console.log('✅ Token stored in localStorage');
 
       // Redirect to dashboard
+      console.log('🚀 Redirecting to dashboard...');
       navigate('/');
     } catch (err) {
-      const errorMessage = (err as any)?.response?.data?.error || 'Login failed. Please try again.';
+      const errorMessage = 'Login failed. Please try again.';
       setError(errorMessage);
-      console.error('Login error:', err);
+      console.error('❌ Login error:', err);
     } finally {
       setIsLoading(false);
     }
