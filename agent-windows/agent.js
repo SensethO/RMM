@@ -101,6 +101,18 @@ function getRamPercent() {
 
 // ─── Disk usage (Windows: partition C:) ──────────────────────────────────────
 function getDiskPercent() {
+  // PowerShell first (wmic supprimé dans Windows 11 22H2+)
+  try {
+    const out = execSync(
+      `powershell -NoProfile -Command "$d=Get-PSDrive C;''+$d.Used+','+$d.Free"`,
+      { encoding: 'utf8', timeout: 5000 }
+    );
+    const [usedStr, freeStr] = out.trim().split(',');
+    const used = parseInt(usedStr), free = parseInt(freeStr);
+    const total = used + free;
+    if (total > 0) return Math.round(used / total * 100);
+  } catch {}
+  // Fallback: wmic (Windows 10 / anciennes versions)
   try {
     const out = execSync(
       'wmic logicaldisk where "DeviceID=\'C:\'" get FreeSpace,Size /value',
@@ -143,7 +155,7 @@ function getDeviceId() {
 }
 
 // ─── Fetch config from backend ────────────────────────────────────────────────
-async function fetchConfig() {
+async function fetchConfig(silent = false) {
   try {
     const res = await request('GET', `/api/devices/${deviceDbId}/config`, null);
     if (res.status === 200 && res.data?.data) {
@@ -157,12 +169,14 @@ async function fetchConfig() {
 
       const changed = prev.telemetryInterval !== agentConfig.telemetryInterval
                    || prev.pollInterval      !== agentConfig.pollInterval;
-      if (changed) {
-        console.log(`🔧 Config rechargée depuis le backend :`);
+      // Log seulement si changement en cours d'exécution (pas au démarrage)
+      if (changed && !silent) {
+        console.log(`🔧 Config mise à jour depuis le backend :`);
         console.log(`   Télémetrie : ${agentConfig.telemetryInterval}s | Poll : ${agentConfig.pollInterval}s`);
-        console.log(`   Seuils alertes → CPU: ${agentConfig.alerts.cpuThreshold}% | RAM: ${agentConfig.alerts.ramThreshold}% | Disk: ${agentConfig.alerts.diskThreshold}%`);
+        console.log(`   Seuils → CPU: ${agentConfig.alerts.cpuThreshold}% | RAM: ${agentConfig.alerts.ramThreshold}% | Disk: ${agentConfig.alerts.diskThreshold}%`);
         return true; // intervals changed → caller should restart timers
       }
+      return changed;
     }
   } catch (e) {
     console.warn('   ⚠️  Config fetch failed (using current values):', e.message);
@@ -386,7 +400,20 @@ function executeCommand(type, params) {
     }
 
     case 'disk_info': {
-      // All drives usage via wmic
+      // PowerShell first (wmic supprimé dans Windows 11 22H2+)
+      try {
+        const ps = "$drives=Get-PSDrive -PSProvider FileSystem | Where-Object {$_.Used -ne $null};" +
+          "$drives | ForEach-Object {" +
+          "  $t=$_.Used+$_.Free;" +
+          "  [PSCustomObject]@{drive=$_.Name+':';label=$_.Root;" +
+          "    total_gb=[math]::Round($t/1GB,1);free_gb=[math]::Round($_.Free/1GB,1);" +
+          "    used_pct=[math]::Round($_.Used/$t*100)}" +
+          "} | ConvertTo-Json";
+        const out = execSync(`powershell -NoProfile -Command "${ps}"`, { encoding: 'utf8', timeout: 8000 });
+        const data = JSON.parse(out.trim());
+        return JSON.stringify(Array.isArray(data) ? data : [data], null, 2);
+      } catch {}
+      // Fallback: wmic (Windows 10 / anciennes versions)
       try {
         const out = execSync('wmic logicaldisk get Caption,FreeSpace,Size,VolumeName /value', { encoding: 'utf8', timeout: 5000 });
         const drives = [];
@@ -433,7 +460,7 @@ async function main() {
 
     // Charger la config depuis le backend
     console.log('\n⚙️  Chargement de la configuration...');
-    await fetchConfig();
+    await fetchConfig(true); // silent=true : pas de double log au démarrage
     console.log(`   Télémetrie : ${agentConfig.telemetryInterval}s | Poll : ${agentConfig.pollInterval}s`);
     console.log(`   Seuils → CPU: ${agentConfig.alerts.cpuThreshold}% | RAM: ${agentConfig.alerts.ramThreshold}% | Disk: ${agentConfig.alerts.diskThreshold}%`);
 
