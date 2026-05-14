@@ -727,50 +727,58 @@ async function executeCommand(type, params) {
     }
 
     case 'list_installed_apps': {
-      console.log('   📋 Récupération des applications installées (registre)...');
-      // Registre Windows : source la plus complète et fiable, fonctionne en SYSTEM
-      const psScript = [
+      console.log('   📋 Récupération des applications installées...');
+      const fs_   = require('fs');
+      const path_ = require('path');
+
+      // Écrire le script PS dans un fichier temporaire (évite tout problème d'échappement)
+      const tmpPs = path_.join(os.tmpdir(), 'rmm-inventory.ps1');
+      fs_.writeFileSync(tmpPs, [
+        '$ErrorActionPreference = "SilentlyContinue"',
         '$keys = @(',
         '  "HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*",',
-        '  "HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*",',
-        '  "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*"',
+        '  "HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*"',
         ')',
         '$seen = @{}',
-        '$apps = $keys | ForEach-Object {',
-        '  Get-ItemProperty $_ -ErrorAction SilentlyContinue',
-        '} | Where-Object { $_.DisplayName -and $_.DisplayName.Trim() -ne "" } |',
-        '  ForEach-Object {',
-        '    $key = $_.DisplayName.Trim()',
-        '    if (-not $seen[$key]) {',
-        '      $seen[$key] = $true',
-        '      [PSCustomObject]@{',
-        '        name      = $_.DisplayName.Trim()',
-        '        version   = if ($_.DisplayVersion) { $_.DisplayVersion.Trim() } else { "" }',
-        '        publisher = if ($_.Publisher) { $_.Publisher.Trim() } else { "" }',
-        '        install_date = if ($_.InstallDate) { $_.InstallDate } else { "" }',
-        '      }',
+        '$apps = @()',
+        'foreach ($key in $keys) {',
+        '  $items = Get-ItemProperty $key -ErrorAction SilentlyContinue',
+        '  if (-not $items) { continue }',
+        '  foreach ($item in $items) {',
+        '    if (-not $item.DisplayName) { continue }',
+        '    $n = $item.DisplayName.Trim()',
+        '    if ($seen[$n]) { continue }',
+        '    $seen[$n] = 1',
+        '    $apps += [PSCustomObject]@{',
+        '      name         = $n',
+        '      version      = if ($item.DisplayVersion) { $item.DisplayVersion.Trim() } else { "" }',
+        '      publisher    = if ($item.Publisher) { $item.Publisher.Trim() } else { "" }',
+        '      install_date = if ($item.InstallDate) { [string]$item.InstallDate } else { "" }',
         '    }',
-        '  } | Sort-Object name',
-        'Write-Output ($apps | ConvertTo-Json -Compress)',
-      ].join('\n');
+        '  }',
+        '}',
+        '$sorted = $apps | Sort-Object name',
+        'if ($sorted.Count -eq 0) { Write-Output "[]" } else { $sorted | ConvertTo-Json -Compress }',
+      ].join('\r\n'), 'utf8');
 
       try {
-        const result = execSync(
-          `powershell -NoProfile -NonInteractive -Command "${psScript.replace(/"/g, '\\"').replace(/\n/g, ' ')}"`,
-          { encoding: 'utf8', timeout: 45_000 }
+        const out = execSync(
+          `powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${tmpPs}"`,
+          { encoding: 'utf8', timeout: 60_000 }
         );
-        const json = result.trim();
-        // Valider que c'est du JSON valide
-        JSON.parse(json);
+        try { fs_.unlinkSync(tmpPs); } catch {}
+        const json = out.trim();
+        JSON.parse(json); // valider
+        console.log(`   ✅ ${JSON.parse(json).length || 0} applications trouvées`);
         return json;
-      } catch (regErr) {
-        console.log('   ⚠ Registre échoué, fallback winget list...');
-        // Fallback winget
+      } catch (psErr) {
+        try { fs_.unlinkSync(tmpPs); } catch {}
+        console.log('   ⚠ PowerShell échoué :', psErr.message?.substring(0, 80));
+        // Fallback winget list
         try {
-          const out = execSync('winget list --accept-source-agreements 2>nul', {
+          return execSync('winget list --accept-source-agreements 2>nul', {
             encoding: 'utf8', timeout: 30_000, shell: 'cmd.exe',
-          });
-          return out.trim();
+          }).trim();
         } catch {
           return '[]';
         }
