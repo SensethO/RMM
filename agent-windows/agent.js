@@ -5,7 +5,7 @@
  * Usage: node agent.js
  */
 
-const AGENT_VERSION = '1.1.1';
+const AGENT_VERSION = '1.1.2';
 const AGENT_RAW_URL = 'https://raw.githubusercontent.com/SensethO/RMM/master/agent-windows/agent.js';
 
 const https = require('https');
@@ -728,60 +728,103 @@ async function executeCommand(type, params) {
 
     case 'list_installed_apps': {
       console.log('   📋 Récupération des applications installées...');
-      const fs_   = require('fs');
-      const path_ = require('path');
 
-      // Écrire le script PS dans un fichier temporaire (évite tout problème d'échappement)
-      const tmpPs = path_.join(os.tmpdir(), 'rmm-inventory.ps1');
-      fs_.writeFileSync(tmpPs, [
+      // ── Approche 1 : PowerShell -EncodedCommand (UTF-16LE Base64, pas d'échappement)
+      // On force l'encodage UTF-8 sur stdout pour que Node.js décode correctement
+      const psCode = [
+        // Force PowerShell à envoyer du UTF-8 sur stdout (sinon CP850/CP1252 → Node.js garble)
+        '$OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)',
         '$ErrorActionPreference = "SilentlyContinue"',
-        '$keys = @(',
-        '  "HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*",',
-        '  "HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*"',
-        ')',
         '$seen = @{}',
-        '$apps = @()',
-        'foreach ($key in $keys) {',
-        '  $items = Get-ItemProperty $key -ErrorAction SilentlyContinue',
-        '  if (-not $items) { continue }',
-        '  foreach ($item in $items) {',
-        '    if (-not $item.DisplayName) { continue }',
-        '    $n = $item.DisplayName.Trim()',
-        '    if ($seen[$n]) { continue }',
-        '    $seen[$n] = 1',
-        '    $apps += [PSCustomObject]@{',
-        '      name         = $n',
-        '      version      = if ($item.DisplayVersion) { $item.DisplayVersion.Trim() } else { "" }',
-        '      publisher    = if ($item.Publisher) { $item.Publisher.Trim() } else { "" }',
-        '      install_date = if ($item.InstallDate) { [string]$item.InstallDate } else { "" }',
+        '$apps = [System.Collections.Generic.List[PSCustomObject]]::new()',
+        '$paths = @(',
+        '  "HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*"',
+        '  "HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*"',
+        '  "HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*"',
+        ')',
+        'foreach ($path in $paths) {',
+        '  try {',
+        '    $items = Get-ItemProperty $path -ErrorAction SilentlyContinue',
+        '    if (-not $items) { continue }',
+        '    foreach ($item in @($items)) {',
+        '      $n = ("$($item.DisplayName)").Trim()',
+        '      if (-not $n -or $seen.ContainsKey($n)) { continue }',
+        '      $seen[$n] = 1',
+        '      $apps.Add([PSCustomObject]@{',
+        '        name         = $n',
+        '        version      = ("$($item.DisplayVersion)").Trim()',
+        '        publisher    = ("$($item.Publisher)").Trim()',
+        '        install_date = ("$($item.InstallDate)").Trim()',
+        '      })',
         '    }',
-        '  }',
+        '  } catch {}',
         '}',
-        '$sorted = $apps | Sort-Object name',
-        'if ($sorted.Count -eq 0) { Write-Output "[]" } else { $sorted | ConvertTo-Json -Compress }',
-      ].join('\r\n'), 'utf8');
+        'if ($apps.Count -gt 0) {',
+        '  ($apps | Sort-Object name) | ConvertTo-Json -Compress -Depth 2',
+        '} else {',
+        '  Write-Output "[]"',
+        '}',
+      ].join('\n');
+
+      // Encoder en UTF-16LE puis Base64 (format attendu par powershell -EncodedCommand)
+      const encoded = Buffer.from(psCode, 'utf16le').toString('base64');
 
       try {
         const out = execSync(
-          `powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${tmpPs}"`,
+          `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ${encoded}`,
           { encoding: 'utf8', timeout: 60_000 }
         );
-        try { fs_.unlinkSync(tmpPs); } catch {}
-        const json = out.trim();
-        JSON.parse(json); // valider
-        console.log(`   ✅ ${JSON.parse(json).length || 0} applications trouvées`);
-        return json;
-      } catch (psErr) {
-        try { fs_.unlinkSync(tmpPs); } catch {}
-        console.log('   ⚠ PowerShell échoué :', psErr.message?.substring(0, 80));
-        // Fallback winget list
-        try {
-          return execSync('winget list --accept-source-agreements 2>nul', {
-            encoding: 'utf8', timeout: 30_000, shell: 'cmd.exe',
-          }).trim();
-        } catch {
-          return '[]';
+        // Extraire la première ligne JSON valide (ignore les warnings éventuels)
+        const lines = out.split('\n').map(l => l.trim()).filter(Boolean);
+        let json = '';
+        for (const line of lines) {
+          if (line.startsWith('[') || line.startsWith('{')) { json = line; break; }
         }
+        if (!json) throw new Error('No JSON in PS output: ' + out.substring(0, 200));
+        const parsed = JSON.parse(json);
+        const arr = Array.isArray(parsed) ? parsed : [parsed];
+        console.log(`   ✅ ${arr.length} applications trouvées (PowerShell)`);
+        return JSON.stringify(arr);
+      } catch (psErr) {
+        const psMsg = ((psErr.stdout || '') + ' ' + (psErr.stderr || '') + ' ' + (psErr.message || '')).substring(0, 200);
+        console.log('   ⚠️  PowerShell échoué, bascule sur reg query :', psMsg);
+      }
+
+      // ── Approche 2 : reg query en cmd.exe (pas de PowerShell, encodage simple)
+      try {
+        const regPaths = [
+          'HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall',
+          'HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall',
+          'HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall',
+        ];
+        const apps = [];
+        const seen = new Set();
+        for (const regPath of regPaths) {
+          try {
+            // /s = récursif, /v DisplayName = valeur ciblée, /f "" = tous les sous-clés
+            const regOut = execSync(
+              `reg query "${regPath}" /s /v DisplayName 2>nul`,
+              { encoding: 'utf8', timeout: 30_000, shell: 'cmd.exe' }
+            );
+            for (const line of regOut.split('\n')) {
+              const m = line.match(/DisplayName\s+REG_SZ\s+(.+)/i);
+              if (m) {
+                const name = m[1].trim();
+                if (name && !seen.has(name)) {
+                  seen.add(name);
+                  apps.push({ name, version: '', publisher: '', install_date: '' });
+                }
+              }
+            }
+          } catch { /* clé absente ou accès refusé, on continue */ }
+        }
+        apps.sort((a, b) => a.name.localeCompare(b.name));
+        console.log(`   ✅ ${apps.length} apps via reg query`);
+        return JSON.stringify(apps);
+      } catch (regErr) {
+        const errMsg = (regErr.message || 'reg query failed').substring(0, 200);
+        console.log('   ❌ reg query échoué :', errMsg);
+        return JSON.stringify([{ name: '[ERREUR] ' + errMsg, version: '', publisher: '', install_date: '' }]);
       }
     }
 
