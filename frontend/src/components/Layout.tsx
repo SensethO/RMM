@@ -1,6 +1,5 @@
 import { ReactNode } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { useMsal } from '@azure/msal-react';
 
 interface LayoutProps {
   children: ReactNode;
@@ -8,10 +7,10 @@ interface LayoutProps {
 
 export default function Layout({ children }: LayoutProps) {
   const location = useLocation();
-  const { instance, accounts } = useMsal();
 
   const handleLogout = () => {
-    instance.logout();
+    localStorage.removeItem('auth_token');
+    window.location.href = '/';
   };
 
   const navItems = [
@@ -21,27 +20,24 @@ export default function Layout({ children }: LayoutProps) {
     { href: '/alerts', label: 'Alerts', icon: '🚨' },
   ];
 
-  const isActive = (href: string) => {
-    return location.pathname === href ? 'bg-blue-700' : '';
-  };
+  const isActive = (href: string) =>
+    location.pathname === href ? 'bg-blue-700' : '';
 
   return (
     <div className="flex h-screen bg-gray-100">
       {/* Sidebar */}
-      <div className="w-64 bg-blue-600 text-white shadow-lg">
+      <div className="w-64 bg-blue-600 text-white shadow-lg flex flex-col">
         <div className="p-6 border-b border-blue-700">
           <h1 className="text-2xl font-bold">RMM</h1>
           <p className="text-blue-200 text-sm mt-1">Remote Management</p>
         </div>
 
-        <nav className="mt-6">
+        <nav className="mt-6 flex-1">
           {navItems.map((item) => (
             <Link
               key={item.href}
               to={item.href}
-              className={`flex items-center px-6 py-3 text-white hover:bg-blue-700 transition ${isActive(
-                item.href
-              )}`}
+              className={`flex items-center px-6 py-3 text-white hover:bg-blue-700 transition ${isActive(item.href)}`}
             >
               <span className="mr-3 text-lg">{item.icon}</span>
               <span>{item.label}</span>
@@ -49,10 +45,10 @@ export default function Layout({ children }: LayoutProps) {
           ))}
         </nav>
 
-        <div className="absolute bottom-0 left-0 right-0 p-6 bg-blue-700 border-t border-blue-600">
+        <div className="p-6 bg-blue-700 border-t border-blue-600">
           <div className="text-sm text-blue-100 mb-3">
-            <p className="font-semibold">{accounts[0]?.name || 'User'}</p>
-            <p className="text-xs text-blue-200">{accounts[0]?.username || 'Loading...'}</p>
+            <p className="font-semibold">Admin User</p>
+            <p className="text-xs text-blue-200">admin@rmm-demo.local</p>
           </div>
           <button
             onClick={handleLogout}
