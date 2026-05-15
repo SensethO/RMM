@@ -1085,6 +1085,81 @@ async function executeCommand(type, params) {
       return JSON.stringify(result);
     }
 
+    // ─── Services Windows ────────────────────────────────────────────────────
+    case 'list_services': {
+      const psCode = [
+        '$OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)',
+        'try {',
+        '  $svcs = Get-WmiObject Win32_Service |',
+        '    Select-Object Name,DisplayName,State,StartMode |',
+        '    Sort-Object DisplayName',
+        '  if ($svcs) { $svcs | ConvertTo-Json -Compress -Depth 2 } else { "[]" }',
+        '} catch { "[]" }',
+      ].join('\n');
+      const encoded = Buffer.from(psCode, 'utf16le').toString('base64');
+      const out = execSync(
+        `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ${encoded}`,
+        { encoding: 'utf8', timeout: 30_000 }
+      );
+      const lines = out.split('\n').map(l => l.trim()).filter(Boolean);
+      let json = '';
+      for (const line of lines) {
+        if (line.startsWith('[') || line.startsWith('{')) { json = line; break; }
+      }
+      if (!json) throw new Error('Aucune sortie JSON de Get-WmiObject Win32_Service');
+      const arr = JSON.parse(json);
+      return JSON.stringify(Array.isArray(arr) ? arr : [arr]);
+    }
+
+    case 'service_action': {
+      const svcName = params.service_name;
+      const action  = (params.action || '').toLowerCase();
+      if (!svcName) throw new Error('Paramètre manquant : service_name');
+      if (!['start','stop','restart'].includes(action))
+        throw new Error(`Action invalide : ${action} (start|stop|restart)`);
+
+      const escaped = svcName.replace(/'/g, "''");
+      const psCmd = action === 'start'
+        ? `Start-Service -Name '${escaped}' -ErrorAction Stop`
+        : action === 'stop'
+          ? `Stop-Service -Name '${escaped}' -Force -ErrorAction Stop`
+          : `Restart-Service -Name '${escaped}' -Force -ErrorAction Stop`;
+
+      execSync(`powershell -NoProfile -Command "${psCmd}"`, { encoding: 'utf8', timeout: 60_000 });
+
+      const newStatus = execSync(
+        `powershell -NoProfile -Command "(Get-Service '${escaped}').Status.ToString()"`,
+        { encoding: 'utf8', timeout: 5_000 }
+      ).trim();
+
+      return JSON.stringify({
+        action,
+        service_name: svcName,
+        new_status:   newStatus,
+        message:      `✅ ${svcName} : ${action} exécuté. Statut : ${newStatus}`,
+      });
+    }
+
+    case 'service_startup': {
+      const svcName     = params.service_name;
+      const startupType = params.startup_type;
+      if (!svcName || !startupType)
+        throw new Error('Paramètres manquants : service_name, startup_type');
+      if (!['Automatic','Manual','Disabled'].includes(startupType))
+        throw new Error(`Type invalide : ${startupType} (Automatic|Manual|Disabled)`);
+
+      const escaped = svcName.replace(/'/g, "''");
+      execSync(
+        `powershell -NoProfile -Command "Set-Service -Name '${escaped}' -StartupType ${startupType}"`,
+        { encoding: 'utf8', timeout: 15_000 }
+      );
+      return JSON.stringify({
+        service_name:  svcName,
+        startup_type:  startupType,
+        message:       `✅ Démarrage de "${svcName}" changé en ${startupType}.`,
+      });
+    }
+
     default:
       return `Commande "${type}" reçue avec params: ${JSON.stringify(params)}`;
   }

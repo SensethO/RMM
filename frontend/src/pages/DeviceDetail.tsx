@@ -295,6 +295,9 @@ export default function DeviceDetail() {
       {/* Installed Apps */}
       <InstalledAppsSection deviceId={id!} />
 
+      {/* Services Windows */}
+      <ServicesSection deviceId={id!} />
+
       {/* Recent Commands */}
       <div className="bg-white rounded-lg shadow p-6">
         <h2 className="text-lg font-semibold text-gray-800 mb-4">Recent Commands</h2>
@@ -1323,6 +1326,243 @@ function NetworkSection({ deviceId }: { deviceId: string }) {
           <p className="text-gray-400 text-sm">Cliquez sur "Lancer le test" pour mesurer la bande passante depuis le device.</p>
         )}
       </div>
+    </div>
+  );
+}
+
+// ─── Services Windows section ─────────────────────────────────────────────────
+interface ServiceInfo {
+  Name: string;
+  DisplayName: string;
+  State: string;     // "Running" | "Stopped" | "Paused" | ...
+  StartMode: string; // "Auto" | "Manual" | "Disabled" | "Boot" | "System"
+}
+
+function ServicesSection({ deviceId }: { deviceId: string }) {
+  const [services,      setServices]      = useState<ServiceInfo[] | null>(null);
+  const [loading,       setLoading]       = useState(false);
+  const [error,         setError]         = useState<string | null>(null);
+  const [search,        setSearch]        = useState('');
+  const [filter,        setFilter]        = useState<'all' | 'running' | 'stopped'>('all');
+  const [lastRefreshed, setLastRefreshed] = useState<string | null>(null);
+  const [pending,       setPending]       = useState<Record<string, string>>({});
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    loadFromHistory();
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, [deviceId]);
+
+  async function loadFromHistory() {
+    try {
+      const hist = await commandAPI.getHistory(deviceId, 30);
+      const cmds = (hist.data.data as Record<string, unknown>[]) || [];
+      const recent = cmds.find(c => c.command_type === 'list_services' && c.status === 'success');
+      if (recent?.output) {
+        try {
+          const parsed = JSON.parse(recent.output as string);
+          if (Array.isArray(parsed)) { setServices(parsed as ServiceInfo[]); setLastRefreshed(recent.created_at as string); }
+        } catch {}
+      }
+    } catch {}
+  }
+
+  async function refresh() {
+    setLoading(true); setError(null);
+    try {
+      const res = await commandAPI.queue(deviceId, { command_type: 'list_services' });
+      const cmdId = (res.data.data as Record<string, unknown>).id as string;
+      let attempts = 0;
+      pollRef.current = setInterval(async () => {
+        attempts++;
+        if (attempts > 30) { clearInterval(pollRef.current!); setError("Timeout — l'agent ne répond pas"); setLoading(false); return; }
+        try {
+          const hist = await commandAPI.getHistory(deviceId, 10);
+          const cmd = (hist.data.data as Record<string, unknown>[])?.find(c => c.id === cmdId);
+          if (cmd?.status === 'success' && cmd.output) {
+            clearInterval(pollRef.current!);
+            try {
+              const parsed = JSON.parse(cmd.output as string);
+              setServices(Array.isArray(parsed) ? parsed as ServiceInfo[] : []);
+              setLastRefreshed(cmd.created_at as string);
+            } catch { setError('Erreur parsing JSON'); }
+            setLoading(false);
+          } else if (cmd?.status === 'failed') {
+            clearInterval(pollRef.current!);
+            setError((cmd.output as string) || 'Échec');
+            setLoading(false);
+          }
+        } catch {}
+      }, 3000);
+    } catch (e) { setError(e instanceof Error ? e.message : 'Erreur'); setLoading(false); }
+  }
+
+  async function serviceAction(name: string, action: 'start' | 'stop' | 'restart') {
+    setPending(p => ({ ...p, [name]: action }));
+    try {
+      const res = await commandAPI.queue(deviceId, { command_type: 'service_action', params: { service_name: name, action } });
+      const cmdId = (res.data.data as Record<string, unknown>).id as string;
+      let attempts = 0;
+      const poll = setInterval(async () => {
+        attempts++;
+        if (attempts > 20) { clearInterval(poll); setPending(p => { const n = { ...p }; delete n[name]; return n; }); return; }
+        const hist = await commandAPI.getHistory(deviceId, 10);
+        const cmd = (hist.data.data as Record<string, unknown>[])?.find(c => c.id === cmdId);
+        if (cmd?.status === 'success' || cmd?.status === 'failed') {
+          clearInterval(poll);
+          setPending(p => { const n = { ...p }; delete n[name]; return n; });
+          if (cmd.status === 'success' && cmd.output) {
+            try {
+              const result = JSON.parse(cmd.output as string) as { new_status?: string };
+              if (result.new_status)
+                setServices(svcs => svcs?.map(s => s.Name === name ? { ...s, State: result.new_status! } : s) || null);
+            } catch {}
+          }
+        }
+      }, 2000);
+    } catch { setPending(p => { const n = { ...p }; delete n[name]; return n; }); }
+  }
+
+  async function changeStartup(name: string, startupType: string) {
+    const key = name + '_startup';
+    setPending(p => ({ ...p, [key]: startupType }));
+    const wmiMode = startupType === 'Automatic' ? 'Auto' : startupType;
+    try {
+      const res = await commandAPI.queue(deviceId, { command_type: 'service_startup', params: { service_name: name, startup_type: startupType } });
+      const cmdId = (res.data.data as Record<string, unknown>).id as string;
+      let attempts = 0;
+      const poll = setInterval(async () => {
+        attempts++;
+        if (attempts > 10) { clearInterval(poll); setPending(p => { const n = { ...p }; delete n[key]; return n; }); return; }
+        const hist = await commandAPI.getHistory(deviceId, 10);
+        const cmd = (hist.data.data as Record<string, unknown>[])?.find(c => c.id === cmdId);
+        if (cmd?.status === 'success' || cmd?.status === 'failed') {
+          clearInterval(poll);
+          setPending(p => { const n = { ...p }; delete n[key]; return n; });
+          if (cmd.status === 'success')
+            setServices(svcs => svcs?.map(s => s.Name === name ? { ...s, StartMode: wmiMode } : s) || null);
+        }
+      }, 2000);
+    } catch { setPending(p => { const n = { ...p }; delete n[key]; return n; }); }
+  }
+
+  const filtered = (services || []).filter(s => {
+    const q = search.toLowerCase();
+    const matchSearch = !q || s.DisplayName.toLowerCase().includes(q) || s.Name.toLowerCase().includes(q);
+    const matchFilter = filter === 'all' || (filter === 'running' && s.State === 'Running') || (filter === 'stopped' && s.State === 'Stopped');
+    return matchSearch && matchFilter;
+  });
+
+  const stateBadge = (state: string, pendingAction?: string) => {
+    if (pendingAction) return (
+      <span className="inline-flex items-center gap-1.5 px-2 py-1 text-xs rounded-full bg-blue-100 text-blue-700 animate-pulse">
+        <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />{pendingAction}…
+      </span>
+    );
+    const cfg = state === 'Running' ? 'bg-green-100 text-green-700' : state === 'Stopped' ? 'bg-gray-100 text-gray-600' : 'bg-yellow-100 text-yellow-700';
+    const dot = state === 'Running' ? 'bg-green-500' : state === 'Stopped' ? 'bg-gray-400' : 'bg-yellow-500';
+    return <span className={`inline-flex items-center gap-1.5 px-2 py-1 text-xs rounded-full font-medium ${cfg}`}><span className={`w-1.5 h-1.5 rounded-full ${dot}`} />{state}</span>;
+  };
+
+  return (
+    <div className="bg-white dark:bg-slate-800 rounded-lg shadow p-6">
+      <div className="flex items-center justify-between border-b dark:border-slate-700 pb-3 mb-4">
+        <h2 className="text-lg font-semibold text-gray-800 dark:text-slate-100">⚙️ Services Windows</h2>
+        <button onClick={refresh} disabled={loading}
+          className="px-4 py-2 bg-slate-600 hover:bg-slate-700 text-white text-sm font-semibold rounded-lg transition disabled:opacity-50">
+          {loading ? '⏳ Chargement...' : '↻ Actualiser'}
+        </button>
+      </div>
+
+      {/* Filtres */}
+      <div className="flex flex-wrap gap-2 mb-4">
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Rechercher un service..."
+          className="border border-gray-300 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-400 w-56" />
+        {(['all','running','stopped'] as const).map(f => (
+          <button key={f} onClick={() => setFilter(f)}
+            className={`px-3 py-1.5 text-xs rounded-lg font-medium transition ${filter === f ? 'bg-slate-600 text-white' : 'bg-gray-100 dark:bg-slate-700 text-gray-600 dark:text-slate-300 hover:bg-gray-200'}`}>
+            {f === 'all' ? 'Tous' : f === 'running' ? '▶ En cours' : '■ Arrêtés'}
+          </button>
+        ))}
+        {services && <span className="text-xs text-gray-400 self-center">{filtered.length} / {services.length} service(s)</span>}
+      </div>
+
+      {error && <p className="text-red-500 text-sm mb-3">{error}</p>}
+      {loading && !services && (
+        <div className="flex items-center gap-2 text-gray-500 text-sm py-6">
+          <div className="animate-spin h-4 w-4 border-2 border-slate-500 border-t-transparent rounded-full" />
+          Récupération des services Windows...
+        </div>
+      )}
+
+      {services && (
+        <div className="overflow-x-auto rounded-lg border border-gray-200 dark:border-slate-700" style={{ maxHeight: '500px', overflowY: 'auto' }}>
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50 dark:bg-slate-700 border-b dark:border-slate-600" style={{ position: 'sticky', top: 0, zIndex: 1 }}>
+              <tr>
+                <th className="px-4 py-2 text-left font-semibold text-gray-600 dark:text-slate-300">Service</th>
+                <th className="px-4 py-2 text-left font-semibold text-gray-600 dark:text-slate-300">Statut</th>
+                <th className="px-4 py-2 text-left font-semibold text-gray-600 dark:text-slate-300">Démarrage</th>
+                <th className="px-4 py-2 text-left font-semibold text-gray-600 dark:text-slate-300">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map(svc => {
+                const isRunning      = svc.State === 'Running';
+                const pendingAction  = pending[svc.Name];
+                const pendingStartup = pending[svc.Name + '_startup'];
+                const isBusy         = !!pendingAction || !!pendingStartup;
+                const isKernelDriver = svc.StartMode === 'Boot' || svc.StartMode === 'System';
+                return (
+                  <tr key={svc.Name} className="border-b dark:border-slate-700 hover:bg-gray-50 dark:hover:bg-slate-700/50">
+                    <td className="px-4 py-2">
+                      <p className="font-medium text-gray-800 dark:text-slate-200">{svc.DisplayName}</p>
+                      <p className="text-xs text-gray-400 font-mono">{svc.Name}</p>
+                    </td>
+                    <td className="px-4 py-2 whitespace-nowrap">{stateBadge(svc.State, pendingAction)}</td>
+                    <td className="px-4 py-2">
+                      <div className="flex items-center gap-1.5">
+                        <select
+                          disabled={isBusy || isKernelDriver}
+                          value={svc.StartMode}
+                          onChange={e => changeStartup(svc.Name, e.target.value === 'Auto' ? 'Automatic' : e.target.value)}
+                          className="border border-gray-300 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-slate-400 disabled:opacity-50"
+                        >
+                          <option value="Auto">Automatique</option>
+                          <option value="Manual">Manuel</option>
+                          <option value="Disabled">Désactivé</option>
+                          {svc.StartMode === 'Boot'   && <option value="Boot">Boot</option>}
+                          {svc.StartMode === 'System' && <option value="System">Système</option>}
+                        </select>
+                        {pendingStartup && <span className="text-blue-500 text-sm">↻</span>}
+                      </div>
+                    </td>
+                    <td className="px-4 py-2">
+                      <div className="flex gap-1">
+                        <button title="Démarrer" disabled={isRunning || isBusy} onClick={() => serviceAction(svc.Name, 'start')}
+                          className="px-2 py-1 rounded text-xs font-bold text-green-700 bg-green-50 hover:bg-green-100 disabled:opacity-25 disabled:cursor-not-allowed transition">▶ Start</button>
+                        <button title="Arrêter" disabled={!isRunning || isBusy} onClick={() => serviceAction(svc.Name, 'stop')}
+                          className="px-2 py-1 rounded text-xs font-bold text-red-700 bg-red-50 hover:bg-red-100 disabled:opacity-25 disabled:cursor-not-allowed transition">■ Stop</button>
+                        <button title="Redémarrer" disabled={!isRunning || isBusy} onClick={() => serviceAction(svc.Name, 'restart')}
+                          className="px-2 py-1 rounded text-xs font-bold text-blue-700 bg-blue-50 hover:bg-blue-100 disabled:opacity-25 disabled:cursor-not-allowed transition">↺ Restart</button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+              {filtered.length === 0 && (
+                <tr><td colSpan={4} className="px-4 py-8 text-center text-gray-400">Aucun service trouvé</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {!services && !loading && !error && (
+        <p className="text-gray-400 text-sm">Cliquez sur "Actualiser" pour lister les services Windows de ce device.</p>
+      )}
+      {lastRefreshed && (
+        <p className="text-xs text-gray-400 mt-2">Dernière mise à jour : {new Date(lastRefreshed).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</p>
+      )}
     </div>
   );
 }

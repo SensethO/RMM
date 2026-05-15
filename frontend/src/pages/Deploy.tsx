@@ -157,6 +157,7 @@ function StatusBadge({ status }: { status: string }) {
 export default function Deploy() {
   const [category, setCategory]         = useState('Tous');
   const [search, setSearch]             = useState('');
+  const [catalogMode, setCatalogMode]   = useState<'install' | 'uninstall'>('install');
   const [devices, setDevices]           = useState<Device[]>([]);
   const [selectedApp, setSelectedApp]   = useState<CatalogApp | null>(null);
   const [selectedDevices, setSelectedDevices] = useState<Set<string>>(new Set());
@@ -205,23 +206,29 @@ export default function Deploy() {
   const selectAllOnline = () =>
     setSelectedDevices(new Set(devices.filter(d => d.status === 'online').map(d => d.id)));
 
-  // Déploiement catalogue
+  // Déploiement/désinstallation catalogue
   const handleDeploy = async () => {
     if (!selectedApp || selectedDevices.size === 0) return;
     setDeploying(true);
     setDeployResult(null);
+    const isUninstall = catalogMode === 'uninstall';
     try {
       const params: AppDeployParams = {
         method: 'winget',
         package_id: selectedApp.package_id,
         display_name: selectedApp.name,
       };
-      await deployAPI.dispatch([...selectedDevices], params);
-      setDeployResult(`✅ Déploiement de "${selectedApp.name}" envoyé sur ${selectedDevices.size} machine(s). L'installation démarrera dans les prochaines secondes.`);
+      if (isUninstall) {
+        await deployAPI.dispatchUninstall([...selectedDevices], { package_id: selectedApp.package_id, display_name: selectedApp.name });
+      } else {
+        await deployAPI.dispatch([...selectedDevices], params);
+      }
+      const verb = isUninstall ? 'Désinstallation' : 'Déploiement';
+      setDeployResult(`✅ ${verb} de "${selectedApp.name}" envoyé sur ${selectedDevices.size} machine(s).`);
       setSelectedDevices(new Set());
       setTimeout(loadHistory, 3000);
     } catch (e) {
-      setDeployResult(`❌ Erreur lors de l'envoi du déploiement.`);
+      setDeployResult(`❌ Erreur lors de l'envoi.`);
     } finally { setDeploying(false); }
   };
 
@@ -453,8 +460,19 @@ export default function Deploy() {
 
           {tab === 'catalog' ? (
             <>
-              {/* Filtres */}
+              {/* Toggle Installer / Désinstaller + Filtres */}
               <div className="bg-white rounded-xl shadow p-4 flex flex-wrap gap-3 items-center">
+                {/* Mode toggle */}
+                <div className="flex rounded-lg overflow-hidden border border-gray-200 shrink-0">
+                  <button onClick={() => setCatalogMode('install')}
+                    className={`px-4 py-2 text-sm font-semibold transition ${catalogMode === 'install' ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>
+                    ⬇ Installer
+                  </button>
+                  <button onClick={() => setCatalogMode('uninstall')}
+                    className={`px-4 py-2 text-sm font-semibold transition ${catalogMode === 'uninstall' ? 'bg-red-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>
+                    🗑 Désinstaller
+                  </button>
+                </div>
                 <input
                   type="text" placeholder="Rechercher..."
                   value={search} onChange={e => setSearch(e.target.value)}
@@ -469,6 +487,12 @@ export default function Deploy() {
                   ))}
                 </div>
               </div>
+              {catalogMode === 'uninstall' && (
+                <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-sm text-red-700 flex items-center gap-2">
+                  <span className="text-lg">⚠️</span>
+                  <span>Mode désinstallation actif — sélectionnez une application et des machines pour envoyer la commande de suppression.</span>
+                </div>
+              )}
 
               {/* Grille catalogue */}
               <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
@@ -582,8 +606,12 @@ export default function Deploy() {
                 <button
                   onClick={handleDeploy}
                   disabled={!selectedApp || selectedDevices.size === 0 || deploying}
-                  className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-semibold py-2.5 px-4 rounded-lg transition text-sm">
-                  {deploying ? '⏳ Envoi...' : selectedApp ? `🚀 Installer ${selectedApp.name}` : '← Choisir une app'}
+                  className={`w-full disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-semibold py-2.5 px-4 rounded-lg transition text-sm ${catalogMode === 'uninstall' ? 'bg-red-600 hover:bg-red-700' : 'bg-blue-600 hover:bg-blue-700'}`}>
+                  {deploying ? '⏳ Envoi...' : selectedApp
+                    ? catalogMode === 'uninstall'
+                      ? `🗑 Désinstaller ${selectedApp.name}`
+                      : `🚀 Installer ${selectedApp.name}`
+                    : '← Choisir une app'}
                 </button>
               ) : (
                 <button

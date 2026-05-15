@@ -5,7 +5,7 @@
  * Usage: node agent.js
  */
 
-const AGENT_VERSION = '1.1.4';
+const AGENT_VERSION = '1.1.5';
 const AGENT_RAW_URL = 'https://raw.githubusercontent.com/SensethO/RMM/master/agent-windows/agent.js';
 
 const https = require('https');
@@ -35,7 +35,7 @@ let agentConfig = {
   },
 };
 
-// ─── State ────────────────────────────────────────────────────────────────────
+// ─── State ─────────────────────────────────���──────────────────────────────────
 let authToken      = null;
 let deviceDbId     = null;   // UUID Supabase du device (retourné par /register)
 let deviceInfo     = null;
@@ -104,7 +104,7 @@ function getRamPercent() {
   return Math.round(((total - free) / total) * 100);
 }
 
-// ─── Public IP ──────────────────────────────────────────────────���������────────────
+// ─── Public IP ──────────────────────────────────────────────────�����������────────────
 function fetchPublicIp() {
   return new Promise((resolve) => {
     https.get('https://api.ipify.org?format=json', (res) => {
@@ -172,7 +172,7 @@ function getDeviceId() {
   return `WIN-${hostname.toUpperCase()}-${mac}`.substring(0, 50);
 }
 
-// ─── Fetch config from backend ─────────────────────���─���─���─���────────────────────
+// ─── Fetch config from backend ───────────────────���─���─���─���─���────────────────────
 async function fetchConfig(silent = false) {
   try {
     const res = await request('GET', `/api/devices/${deviceDbId}/config`, null);
@@ -602,7 +602,7 @@ async function executeCommand(type, params) {
       return `✅ Mise à jour téléchargée (${content.length} octets). Redémarrage en cours...`;
     }
 
-    // ─── Déploiement logiciels ────────────────────────────────────────────────
+    // ─── Déploiement logiciels ────────────────────────────────────────────��───
     case 'install_app': {
       const machineArch = os.arch(); // 'x64', 'arm64', 'ia32'...
       const isARM64     = machineArch === 'arm64';
@@ -616,6 +616,12 @@ async function executeCommand(type, params) {
         'Microsoft.VisualStudioCode':  null,
         'Slack.Slack':                 null,
         'SlackTechnologies.Slack':     null,
+        // Apps IA — supportent ARM64 nativement
+        'Anthropic.Claude':            null,
+        'Perplexity.Perplexity':       null,
+        'Ollama.Ollama':               null,
+        '9NTM2QC6QWS7':               null, // ChatGPT (Microsoft Store)
+        '9NHT9RB2F4HD':               null, // Microsoft Copilot (Microsoft Store)
       };
 
       const method      = params.method || 'winget';
@@ -634,6 +640,7 @@ async function executeCommand(type, params) {
         const adwUrl = 'https://adwcleaner.malwarebytes.com/adwcleaner?channel=release';
         console.log(`   📥 ADWCleaner: téléchargement direct depuis Malwarebytes...`);
 
+        // Helper téléchargement avec suivi de redirects
         const downloadAdw = (url, left = 8) => new Promise((resolve, reject) => {
           const mod = url.startsWith('https') ? https : http;
           mod.get(url, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' } }, res => {
@@ -936,6 +943,221 @@ async function executeCommand(type, params) {
         console.log('   ❌ reg query échoué :', errMsg);
         return JSON.stringify([{ name: '[ERREUR] ' + errMsg, version: '', publisher: '', install_date: '' }]);
       }
+    }
+
+    // ─── ADWCleaner ──────────────────────────────────────────────────────────
+    case 'adwcleaner_scan':
+    case 'adwcleaner_clean':
+    case 'adwcleaner_purge': {
+      const fs   = require('fs');
+      const path = require('path');
+
+      // ── Trouver l'exécutable ADWCleaner ────────────────────────────────
+      const adwPaths = [
+        'C:\\Program Files\\Malwarebytes\\AdwCleaner\\adwcleaner.exe',
+        'C:\\Program Files (x86)\\Malwarebytes\\AdwCleaner\\adwcleaner.exe',
+        'C:\\AdwCleaner\\adwcleaner.exe',
+      ];
+      let adwExe = null;
+      for (const p of adwPaths) { if (fs.existsSync(p)) { adwExe = p; break; } }
+      if (!adwExe) {
+        try {
+          const w = execSync('where adwcleaner.exe 2>nul', { encoding: 'utf8', timeout: 3000, shell: 'cmd.exe' });
+          const found = w.trim().split('\n')[0]?.trim();
+          if (found && fs.existsSync(found)) adwExe = found;
+        } catch {}
+      }
+      if (!adwExe) {
+        throw new Error('ADWCleaner non trouvé. Installez-le via "Déploiements" > Malwarebytes.AdwCleaner.');
+      }
+
+      // ── PURGE ────────────────────────────────────────────────────────────
+      if (type === 'adwcleaner_purge') {
+        console.log('   🗑  Purge de la quarantaine ADWCleaner...');
+        try {
+          execSync(`"${adwExe}" /eula /quarantine purge`, { timeout: 60_000, shell: 'cmd.exe' });
+        } catch {}
+        // Fallback : supprimer manuellement le dossier quarantaine
+        const qDir = 'C:\\AdwCleaner\\Quarantine';
+        let purgedFiles = 0;
+        if (fs.existsSync(qDir)) {
+          try {
+            execSync(`rd /s /q "${qDir}" 2>nul`, { timeout: 10_000, shell: 'cmd.exe' });
+            purgedFiles = 1; // approximatif
+          } catch {}
+        }
+        return JSON.stringify({
+          action:  'purge',
+          date:    new Date().toISOString(),
+          message: '✅ Quarantaine vidée définitivement.',
+        });
+      }
+
+      // ── Fonction de parsing du log ADWCleaner ────────────────────────────
+      function parseAdwLog(content) {
+        const threats = [];
+        // Chaque section : ***** [ Catégorie ] *****
+        const sectionRe = /\*{5}\s*\[\s*([^\]]+?)\s*\]\s*\*{5}([\s\S]*?)(?=\*{5}\s*\[|#{5,}|$)/g;
+        let m;
+        while ((m = sectionRe.exec(content)) !== null) {
+          const category = m[1].trim();
+          for (const line of m[2].split('\n')) {
+            const t = line.trim();
+            if (!t || /^No\s/i.test(t) || t.startsWith('#')) continue;
+            // Format : "Threat.Type  /chemin/ou/clé"
+            const parts = t.match(/^([\w.\/-]+)\s{2,}(.+)$/);
+            if (parts) {
+              threats.push({ type: parts[1].trim(), category, path: parts[2].trim(), status: 'found' });
+            }
+          }
+        }
+        return threats;
+      }
+
+      // ── Trouver le dernier log ADWCleaner ────────────────────────────────
+      function findLatestLog(prefix) {
+        const logDir = 'C:\\AdwCleaner\\Logs';
+        if (!fs.existsSync(logDir)) return null;
+        const re = new RegExp(`AdwCleaner\\[${prefix}\\d+\\]\\.txt`, 'i');
+        const logs = fs.readdirSync(logDir).filter(f => re.test(f)).sort().reverse();
+        return logs[0] ? path.join(logDir, logs[0]) : null;
+      }
+
+      function readLog(logFile) {
+        // ADWCleaner écrit en UTF-16LE ou UTF-8 selon la version
+        try { return fs.readFileSync(logFile, 'utf16le'); } catch {}
+        try { return fs.readFileSync(logFile, 'utf8');    } catch {}
+        return '';
+      }
+
+      // ── CLEAN (quarantaine) ───────────────────────────────────────────────
+      if (type === 'adwcleaner_clean') {
+        console.log('   🔒 Mise en quarantaine des menaces...');
+        try {
+          execSync(`"${adwExe}" /eula /clean /noreboot`, { timeout: 180_000, shell: 'cmd.exe' });
+        } catch {}
+        const cleanLog = findLatestLog('C');
+        let quarantined = 0;
+        if (cleanLog) {
+          const content = readLog(cleanLog);
+          quarantined = parseAdwLog(content).length;
+        }
+        console.log(`   ✅ Quarantaine : ${quarantined} élément(s)`);
+        return JSON.stringify({
+          action:      'clean',
+          date:        new Date().toISOString(),
+          quarantined,
+          message:     `✅ ${quarantined} élément(s) mis en quarantaine.`,
+          log_path:    cleanLog || null,
+        });
+      }
+
+      // ── SCAN ─────────────────────────────────────────────────────────────
+      console.log('   🔍 Lancement du scan ADWCleaner (1-2 min)...');
+      try {
+        execSync(`"${adwExe}" /eula /scan /noreboot`, { timeout: 180_000, shell: 'cmd.exe' });
+      } catch {}  // exit code non-0 même si scan OK
+
+      // Chercher le log de scan [S##]
+      let scanLog = findLatestLog('S');
+      // Fallback : log dans le dossier racine AdwCleaner (anciennes versions)
+      if (!scanLog) {
+        const alt = 'C:\\AdwCleaner\\AdwCleaner[S00].txt';
+        if (fs.existsSync(alt)) scanLog = alt;
+      }
+      if (!scanLog) throw new Error('Log de scan ADWCleaner introuvable. Le scan a peut-être échoué.');
+
+      const content   = readLog(scanLog);
+      const threats   = parseAdwLog(content);
+      const verMatch  = content.match(/AdwCleaner\s+([\d.]+)/);
+      const dbMatch   = content.match(/Database:\s+(\S+)/);
+
+      const result = {
+        scan_date:     new Date().toISOString(),
+        version:       verMatch?.[1] || 'unknown',
+        database:      dbMatch?.[1]  || '',
+        threats_count: threats.length,
+        clean:         threats.length === 0,
+        threats,
+        log_path:      scanLog,
+      };
+      console.log(`   ✅ Scan terminé : ${threats.length} menace(s) trouvée(s)`);
+      return JSON.stringify(result);
+    }
+
+    // ─── Services Windows ────────────────────────────────────────────────────
+    case 'list_services': {
+      const psCode = [
+        '$OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)',
+        'try {',
+        '  $svcs = Get-WmiObject Win32_Service |',
+        '    Select-Object Name,DisplayName,State,StartMode |',
+        '    Sort-Object DisplayName',
+        '  if ($svcs) { $svcs | ConvertTo-Json -Compress -Depth 2 } else { "[]" }',
+        '} catch { "[]" }',
+      ].join('\n');
+      const encoded = Buffer.from(psCode, 'utf16le').toString('base64');
+      const out = execSync(
+        `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ${encoded}`,
+        { encoding: 'utf8', timeout: 30_000 }
+      );
+      const lines = out.split('\n').map(l => l.trim()).filter(Boolean);
+      let json = '';
+      for (const line of lines) {
+        if (line.startsWith('[') || line.startsWith('{')) { json = line; break; }
+      }
+      if (!json) throw new Error('Aucune sortie JSON de Get-WmiObject Win32_Service');
+      const arr = JSON.parse(json);
+      return JSON.stringify(Array.isArray(arr) ? arr : [arr]);
+    }
+
+    case 'service_action': {
+      const svcName = params.service_name;
+      const action  = (params.action || '').toLowerCase();
+      if (!svcName) throw new Error('Paramètre manquant : service_name');
+      if (!['start','stop','restart'].includes(action))
+        throw new Error(`Action invalide : ${action} (start|stop|restart)`);
+
+      const escaped = svcName.replace(/'/g, "''");
+      const psCmd = action === 'start'
+        ? `Start-Service -Name '${escaped}' -ErrorAction Stop`
+        : action === 'stop'
+          ? `Stop-Service -Name '${escaped}' -Force -ErrorAction Stop`
+          : `Restart-Service -Name '${escaped}' -Force -ErrorAction Stop`;
+
+      execSync(`powershell -NoProfile -Command "${psCmd}"`, { encoding: 'utf8', timeout: 60_000 });
+
+      const newStatus = execSync(
+        `powershell -NoProfile -Command "(Get-Service '${escaped}').Status.ToString()"`,
+        { encoding: 'utf8', timeout: 5_000 }
+      ).trim();
+
+      return JSON.stringify({
+        action,
+        service_name: svcName,
+        new_status:   newStatus,
+        message:      `✅ ${svcName} : ${action} exécuté. Statut : ${newStatus}`,
+      });
+    }
+
+    case 'service_startup': {
+      const svcName     = params.service_name;
+      const startupType = params.startup_type;
+      if (!svcName || !startupType)
+        throw new Error('Paramètres manquants : service_name, startup_type');
+      if (!['Automatic','Manual','Disabled'].includes(startupType))
+        throw new Error(`Type invalide : ${startupType} (Automatic|Manual|Disabled)`);
+
+      const escaped = svcName.replace(/'/g, "''");
+      execSync(
+        `powershell -NoProfile -Command "Set-Service -Name '${escaped}' -StartupType ${startupType}"`,
+        { encoding: 'utf8', timeout: 15_000 }
+      );
+      return JSON.stringify({
+        service_name:  svcName,
+        startup_type:  startupType,
+        message:       `✅ Démarrage de "${svcName}" changé en ${startupType}.`,
+      });
     }
 
     default:
