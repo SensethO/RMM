@@ -102,7 +102,7 @@ function getRamPercent() {
   return Math.round(((total - free) / total) * 100);
 }
 
-// ─── Public IP ──────────────────────────────────────────────────���������────────────
+// ─── Public IP ──────────────────────────────────────────────────�����������────────────
 function fetchPublicIp() {
   return new Promise((resolve) => {
     https.get('https://api.ipify.org?format=json', (res) => {
@@ -170,7 +170,7 @@ function getDeviceId() {
   return `WIN-${hostname.toUpperCase()}-${mac}`.substring(0, 50);
 }
 
-// ─── Fetch config from backend ─────────────────────���─���─���─���────────────────────
+// ─── Fetch config from backend ───────────────────���─���─���─���─���────────────────────
 async function fetchConfig(silent = false) {
   try {
     const res = await request('GET', `/api/devices/${deviceDbId}/config`, null);
@@ -614,6 +614,12 @@ async function executeCommand(type, params) {
         'Microsoft.VisualStudioCode':  null,
         'Slack.Slack':                 null,
         'SlackTechnologies.Slack':     null,
+        // Apps IA — supportent ARM64 nativement
+        'Anthropic.Claude':            null,
+        'Perplexity.Perplexity':       null,
+        'Ollama.Ollama':               null,
+        '9NTM2QC6QWS7':               null, // ChatGPT (Microsoft Store)
+        '9NHT9RB2F4HD':               null, // Microsoft Copilot (Microsoft Store)
       };
 
       const method      = params.method || 'winget';
