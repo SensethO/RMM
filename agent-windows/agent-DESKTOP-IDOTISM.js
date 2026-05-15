@@ -12,8 +12,31 @@ const https = require('https');
 const http  = require('http');
 const os    = require('os');
 const { execSync: _execSync } = require('child_process');
-// windowsHide: true sur tous les exec → supprime les fenêtres CMD flashing
-const execSync = (cmd, opts = {}) => _execSync(cmd, { windowsHide: true, ...opts });
+// windowsHide: true forcé EN DERNIER → ne peut jamais être écrasé par opts
+const execSync = (cmd, opts = {}) => _execSync(cmd, { ...opts, windowsHide: true });
+
+// ─── Log file + PID (pour la tray icon) ──────────────────────────────────────
+const _fs   = require('fs');
+const _path = require('path');
+const RMM_DATA_DIR = _path.join(process.env.ProgramData || 'C:\\ProgramData', 'RMM');
+const RMM_LOG_FILE = _path.join(RMM_DATA_DIR, 'agent.log');
+const RMM_PID_FILE = _path.join(RMM_DATA_DIR, 'agent.pid');
+;(function initLogger() {
+  try {
+    if (!_fs.existsSync(RMM_DATA_DIR)) _fs.mkdirSync(RMM_DATA_DIR, { recursive: true });
+    try { if (_fs.existsSync(RMM_LOG_FILE) && _fs.statSync(RMM_LOG_FILE).size > 2e6) _fs.renameSync(RMM_LOG_FILE, RMM_LOG_FILE + '.old'); } catch {}
+    const _stream = _fs.createWriteStream(RMM_LOG_FILE, { flags: 'a' });
+    const _ts  = () => new Date().toLocaleString('fr-FR');
+    const _fmt = (...a) => a.map(x => typeof x === 'string' ? x : JSON.stringify(x)).join(' ');
+    const _L = console.log.bind(console);
+    const _E = console.error.bind(console);
+    const _W = console.warn.bind(console);
+    console.log   = (...a) => { _L(...a);  _stream.write(`[${_ts()}] INFO  ${_fmt(...a)}\n`); };
+    console.error = (...a) => { _E(...a);  _stream.write(`[${_ts()}] ERROR ${_fmt(...a)}\n`); };
+    console.warn  = (...a) => { _W(...a);  _stream.write(`[${_ts()}] WARN  ${_fmt(...a)}\n`); };
+    _fs.writeFileSync(RMM_PID_FILE, String(process.pid));
+  } catch {}
+})();
 
 // ─── Configuration ────────────────────────────────────────────────────────────
 const CONFIG = {
