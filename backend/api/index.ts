@@ -186,9 +186,18 @@ devicesRouter.get('/', async (req: Request, res: Response) => {
     const supabase = getSupabase();
     let query = supabase.from('devices').select('*').eq('tenant_id', req.tenant.id).order('created_at', { ascending: false }).range(offset, offset + limit - 1);
     if (req.query.status) query = query.eq('status', req.query.status as string);
-    const { data: devices, error } = await query;
+    const { data: devicesRaw, error } = await query;
     if (error) { logger.error('List devices:', error); res.status(500).json({ error: 'Failed to list devices' }); return; }
-    res.json({ data: devices || [], count: (devices || []).length, limit, offset, statusCode: 200 });
+
+    // Auto-offline: mark devices as offline if last_seen > 3 minutes ago
+    const threeMinutesAgo = new Date(Date.now() - 3 * 60 * 1000).toISOString();
+    const devices = (devicesRaw || []).map((d: Record<string, unknown>) => {
+      if (d.status === 'online' && d.last_seen && (d.last_seen as string) < threeMinutesAgo) {
+        return { ...d, status: 'offline' };
+      }
+      return d;
+    });
+    res.json({ data: devices, count: devices.length, limit, offset, statusCode: 200 });
   } catch (err) { logger.error('List devices error:', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
@@ -232,6 +241,8 @@ app.post('/api/devices/:device_id/telemetry', async (req: Request, res: Response
     if (!device) { res.status(404).json({ error: 'Device not found' }); return; }
     const { data: telemetry, error } = await supabase.from('device_telemetry').insert({ device_id: req.params.device_id, cpu_percent, ram_percent, disk_percent, network_bytes_sec: network_bytes_sec || 0, timestamp: new Date().toISOString() }).select().single();
     if (error) { logger.error('Store telemetry:', error); res.status(500).json({ error: 'Failed to store telemetry' }); return; }
+    // Update last_seen + ensure status=online on every telemetry
+    await supabase.from('devices').update({ last_seen: new Date().toISOString(), status: 'online', updated_at: new Date().toISOString() }).eq('id', req.params.device_id).eq('tenant_id', req.tenant.id);
 
     // ─── Auto-alert based on configured thresholds ──────────────────────────
     try {
