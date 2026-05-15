@@ -5,7 +5,7 @@
  * Usage: node agent.js
  */
 
-const AGENT_VERSION = '1.1.3';
+const AGENT_VERSION = '1.1.4';
 const AGENT_RAW_URL = 'https://raw.githubusercontent.com/SensethO/RMM/master/agent-windows/agent.js';
 
 const https = require('https');
@@ -102,7 +102,7 @@ function getRamPercent() {
   return Math.round(((total - free) / total) * 100);
 }
 
-// ─── Public IP ──────────────────────────────────────────────────�������────────────
+// ─── Public IP ──────────────────────────────────────────────────���������────────────
 function fetchPublicIp() {
   return new Promise((resolve) => {
     https.get('https://api.ipify.org?format=json', (res) => {
@@ -170,7 +170,7 @@ function getDeviceId() {
   return `WIN-${hostname.toUpperCase()}-${mac}`.substring(0, 50);
 }
 
-// ─── Fetch config from backend ───────────────────────���─���─���────────────────────
+// ─── Fetch config from backend ─────────────────────���─���─���─���────────────────────
 async function fetchConfig(silent = false) {
   try {
     const res = await request('GET', `/api/devices/${deviceDbId}/config`, null);
@@ -602,6 +602,20 @@ async function executeCommand(type, params) {
 
     // ─── Déploiement logiciels ────────────────────────────────────────────────
     case 'install_app': {
+      const machineArch = os.arch(); // 'x64', 'arm64', 'ia32'...
+      const isARM64     = machineArch === 'arm64';
+
+      // Packages dont l'ID x64 doit être tenté en ARM64 natif si dispo dans winget
+      // null = pas d'ID séparé → on tente --architecture arm64 sur le même ID, fallback x64
+      const ARM64_ID_MAP = {
+        'Adobe.Acrobat.Reader.64-bit': null,
+        'Google.Chrome':               null,
+        'Mozilla.Firefox':             null,
+        'Microsoft.VisualStudioCode':  null,
+        'Slack.Slack':                 null,
+        'SlackTechnologies.Slack':     null,
+      };
+
       const method      = params.method || 'winget';
       const packageId   = params.package_id;
       const installUrl  = params.url;
@@ -609,39 +623,84 @@ async function executeCommand(type, params) {
       const displayName = params.display_name || packageId || installUrl || 'Application';
 
       if (method === 'winget') {
-        if (!packageId) throw new Error('Paramètre manquant : package_id');
-        console.log(`   📦 winget install ${packageId}...`);
-        const cmd = `winget install --id "${packageId}" --silent --accept-package-agreements --accept-source-agreements --disable-interactivity`;
+        if (!packageId) throw new Error('Parametre manquant : package_id');
+
+        // ── Résolution ARM64 ─────────────────────────────────────────────
+        let effectivePackageId = packageId;
+        let archNote = '';
+
+        if (isARM64 && packageId in ARM64_ID_MAP && ARM64_ID_MAP[packageId]) {
+          effectivePackageId = ARM64_ID_MAP[packageId];
+          archNote = ` [ARM64 natif — ID: ${effectivePackageId}]`;
+        }
+
+        console.log(`   📦 winget install ${effectivePackageId}${isARM64 ? ' [machine ARM64]' : ''}...`);
+
+        const baseFlags = `--silent --accept-package-agreements --accept-source-agreements --disable-interactivity`;
         let installOutput = '';
-        try {
-          installOutput = execSync(cmd, { encoding: 'utf8', timeout: 300_000, shell: 'cmd.exe' });
-        } catch (installErr) {
-          // winget peut retourner un code non-zéro même en cas de succès (déjà installé, etc.)
-          installOutput = installErr.stdout || installErr.message || '';
-          if (!installOutput.toLowerCase().includes('successfully installed') &&
-              !installOutput.toLowerCase().includes('already installed') &&
-              !installOutput.toLowerCase().includes('déjà installé') &&
-              !installOutput.toLowerCase().includes('no applicable upgrade found')) {
-            throw new Error(`Installation échouée.\n${installOutput.trim()}`);
+        let installedNatively = false;
+
+        // ── Tentative ARM64 native (si machine ARM64 et pas déjà d'ID spécifique) ──
+        if (isARM64 && !archNote) {
+          const arm64Cmd = `winget install --id "${effectivePackageId}" --architecture arm64 ${baseFlags}`;
+          try {
+            installOutput = execSync(arm64Cmd, { encoding: 'utf8', timeout: 300_000, shell: 'cmd.exe' });
+            installedNatively = true;
+            archNote = ` [ARM64 natif ✅]`;
+            console.log(`   ✅ Installé en natif ARM64`);
+          } catch (arm64Err) {
+            const arm64Out = (arm64Err.stdout || arm64Err.message || '').toLowerCase();
+            const alreadyOk = arm64Out.includes('already installed') ||
+                              arm64Out.includes('successfully installed') ||
+                              arm64Out.includes('déjà installé');
+            if (alreadyOk) {
+              installOutput = arm64Err.stdout || arm64Err.message || '';
+              installedNatively = true;
+              archNote = ` [ARM64 natif ✅]`;
+            } else {
+              // ARM64 non dispo pour ce paquet → fallback x64 émulé
+              console.log(`   ℹ️  ARM64 non disponible pour ${effectivePackageId}, bascule x64 émulé...`);
+              archNote = ` [x64 émulé sur ARM64 ⚠️]`;
+            }
           }
         }
+
+        // ── Installation standard (x64 ou si ARM64 déjà fait) ────────────
+        if (!installedNatively) {
+          const cmd = `winget install --id "${effectivePackageId}" ${baseFlags}`;
+          try {
+            installOutput = execSync(cmd, { encoding: 'utf8', timeout: 300_000, shell: 'cmd.exe' });
+          } catch (installErr) {
+            installOutput = installErr.stdout || installErr.message || '';
+            if (!installOutput.toLowerCase().includes('successfully installed') &&
+                !installOutput.toLowerCase().includes('already installed') &&
+                !installOutput.toLowerCase().includes('déjà installé') &&
+                !installOutput.toLowerCase().includes('no applicable upgrade found')) {
+              throw new Error(`Installation échouée.${archNote}\n${installOutput.trim()}`);
+            }
+          }
+        }
+
         // ── Vérification post-installation ──────────────────────────────
         let verifyLine = '';
         try {
-          const checkOut = execSync(`winget list --id "${packageId}" --accept-source-agreements 2>nul`, {
+          const checkOut = execSync(`winget list --id "${effectivePackageId}" --accept-source-agreements 2>nul`, {
             encoding: 'utf8', timeout: 15_000, shell: 'cmd.exe',
           });
-          // Trouver la ligne qui contient le package ID
-          const lines = checkOut.split('\n').filter(l => l.toLowerCase().includes(packageId.toLowerCase()));
+          const lines = checkOut.split('\n').filter(l => l.toLowerCase().includes(effectivePackageId.toLowerCase()));
           if (lines.length > 0) {
             verifyLine = `✅ VÉRIFIÉ installé : ${lines[0].trim()}`;
           } else {
-            verifyLine = `⚠️ Non trouvé dans winget list après installation (peut être normal pour certains paquets)`;
+            verifyLine = `⚠️ Non trouvé dans winget list après installation (peut être normal)`;
           }
         } catch {
           verifyLine = '⚠️ Vérification winget list indisponible';
         }
-        return `✅ ${displayName} installé.\n\n--- Vérification ---\n${verifyLine}\n\n--- Output winget ---\n${installOutput.trim()}`;
+
+        const archSummary = isARM64
+          ? `\n--- Architecture ---\nMachine: ${machineArch.toUpperCase()}${archNote}\n`
+          : '';
+        return `✅ ${displayName} installé.${archNote}\n${archSummary}\n--- Vérification ---\n${verifyLine}\n\n--- Output winget ---\n${installOutput.trim()}`;
       }
 
       if (method === 'url') {

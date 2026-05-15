@@ -42,7 +42,7 @@ app.use((req, res, next) => {
 
 // ─── Health ──────────────────────────────────────────────────────────────────
 // ─── Versions ────────────────────────────────────────────────────────────────
-const EXPECTED_AGENT_VERSION = '1.1.1';
+const EXPECTED_AGENT_VERSION = '1.1.4';
 const APP_VERSION             = '1.1.0';
 
 app.get('/api/system/info', (_req, res) => {
@@ -208,7 +208,11 @@ devicesRouter.get('/:id', async (req: Request, res: Response) => {
     const { data: device, error } = await supabase.from('devices').select('*').eq('tenant_id', req.tenant.id).eq('id', req.params.id).single();
     if (error || !device) { res.status(404).json({ error: 'Device not found' }); return; }
     const { data: telemetry } = await supabase.from('device_telemetry').select('*').eq('device_id', req.params.id).order('timestamp', { ascending: false }).limit(1).single();
-    res.json({ data: { ...device, latest_telemetry: telemetry || null }, statusCode: 200 });
+    // Apply same auto-offline logic as list endpoint
+    const threeMinutesAgo = new Date(Date.now() - 3 * 60 * 1000).toISOString();
+    const effectiveStatus = (device.status === 'online' && device.last_seen && device.last_seen < threeMinutesAgo)
+      ? 'offline' : device.status;
+    res.json({ data: { ...device, status: effectiveStatus, latest_telemetry: telemetry || null }, statusCode: 200 });
   } catch (err) { logger.error('Get device error:', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
