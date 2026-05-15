@@ -16,3 +16,28 @@ html, body, #root {
 body {
   background-color: #f5f5f5;
 }
+
+.dark body {
+  background-color: #0f172a;
+}
+
+/* Smooth theme transitions (disabled during initial load) */
+html:not(.no-transitions) *,
+html:not(.no-transitions) *::before,
+html:not(.no-transitions) *::after {
+  transition-property: background-color, border-color, color, fill, stroke;
+  transition-duration: 200ms;
+  transition-timing-function: ease;
+}
+
+/* Scrollbar dark mode */
+.dark ::-webkit-scrollbar {
+  background: #1e293b;
+}
+.dark ::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 4px;
+}
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #475569;
+}

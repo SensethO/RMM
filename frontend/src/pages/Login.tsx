@@ -18,7 +18,8 @@ export function Login() {
     try {
       // Validate credentials
       console.log('🔐 Checking credentials:', username);
-      if (username !== 'admin' || password !== 'demo123') {
+      const storedPassword = localStorage.getItem('rmm_password') || 'demo123';
+      if (username !== 'admin' || password !== storedPassword) {
         console.log('❌ Invalid credentials');
         setError('Invalid username or password');
         setIsLoading(false);
@@ -43,6 +44,7 @@ export function Login() {
       console.log('✅ JWT generated:', token.substring(0, 50) + '...');
       // Store token in localStorage
       localStorage.setItem('auth_token', token);
+      localStorage.removeItem('rmm_session_id'); // Fresh session on each login
       console.log('✅ Token stored in localStorage');
 
       // Redirect to dashboard - use hard reload so App.tsx re-reads localStorage

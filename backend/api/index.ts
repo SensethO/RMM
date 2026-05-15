@@ -149,13 +149,13 @@ async function tenantMiddleware(req: Request, res: Response, next: NextFunction)
   }
 }
 
-// Apply auth + tenant to all /api/ routes (except /api/auth and /api/health)
+// Apply auth + tenant to all /api/ routes (except /api/auth, /api/health, /api/sessions)
 app.use('/api/', (req, res, next) => {
-  if (req.path.startsWith('/auth') || req.path === '/health' || req.path.startsWith('/system')) return next();
+  if (req.path.startsWith('/auth') || req.path === '/health' || req.path.startsWith('/system') || req.path.startsWith('/sessions')) return next();
   authMiddleware(req, res, next);
 });
 app.use('/api/', (req, res, next) => {
-  if (req.path.startsWith('/auth') || req.path === '/health' || req.path.startsWith('/system')) return next();
+  if (req.path.startsWith('/auth') || req.path === '/health' || req.path.startsWith('/system') || req.path.startsWith('/sessions')) return next();
   tenantMiddleware(req, res, next);
 });
 
@@ -740,6 +740,167 @@ app.get('/api/microsoft365/subscriptions', async (req, res) => {
     if (d.error) { res.status(400).json({ error: d.error.message }); return; }
     res.json({ data: d.value || [], statusCode: 200 });
   } catch { res.status(500).json({ error: 'Erreur Graph API' }); }
+});
+
+// ─── Session tracking (no auth required — called client-side) ────────────────
+
+function parseBrowser(ua: string): string {
+  if (!ua) return 'Unknown';
+  if (ua.includes('Edg/') || ua.includes('EdgA/')) return 'Edge';
+  if (ua.includes('Chrome/') && !ua.includes('Chromium')) return 'Chrome';
+  if (ua.includes('Firefox/')) return 'Firefox';
+  if (ua.includes('Safari/') && !ua.includes('Chrome')) return 'Safari';
+  if (ua.includes('MSIE') || ua.includes('Trident/')) return 'IE';
+  return 'Other';
+}
+
+function decodeTokenInfo(authHeader?: string): { user_id: string; user_name: string; user_email: string } {
+  const defaults = { user_id: 'anonymous', user_name: 'Inconnu', user_email: '' };
+  if (!authHeader?.startsWith('Bearer ')) return defaults;
+  try {
+    const parts = authHeader.split(' ')[1].split('.');
+    if (parts.length !== 3) return defaults;
+    const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString()) as Record<string, string>;
+    return {
+      user_id:    payload.sub   || 'demo-user-001',
+      user_name:  payload.name  || 'Admin User',
+      user_email: payload.email || 'admin@rmm-demo.local',
+    };
+  } catch { return defaults; }
+}
+
+// POST /api/sessions/start — start a new session
+app.post('/api/sessions/start', async (req: Request, res: Response) => {
+  try {
+    const supabase = getSupabase();
+    const { user_agent = '', screen_resolution = '' } = req.body as Record<string, string>;
+    const ip_address = ((req.headers['x-forwarded-for'] as string) || req.ip || 'unknown').split(',')[0].trim();
+    const { user_id, user_name, user_email } = decodeTokenInfo(req.headers.authorization);
+
+    const { data, error } = await supabase
+      .from('user_sessions')
+      .insert({
+        user_id, user_name, user_email,
+        ip_address,
+        user_agent,
+        browser: parseBrowser(user_agent),
+        screen_resolution,
+        started_at: new Date().toISOString(),
+        last_active_at: new Date().toISOString(),
+        page_count: 0,
+        is_active: true,
+      })
+      .select('id')
+      .single();
+
+    if (error) { res.status(500).json({ error: error.message }); return; }
+    res.json({ session_id: (data as { id: string }).id });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : 'error' });
+  }
+});
+
+// POST /api/sessions/event — log a page view, action or heartbeat
+app.post('/api/sessions/event', async (req: Request, res: Response) => {
+  try {
+    const supabase = getSupabase();
+    const { session_id, event_type, page, previous_page, time_on_previous_page, action_label, metadata } = req.body as Record<string, unknown>;
+    if (!session_id) { res.status(400).json({ error: 'session_id required' }); return; }
+
+    await supabase.from('session_events').insert({
+      session_id,
+      event_type,
+      page: page || previous_page || null,
+      previous_page: previous_page || null,
+      action_label: action_label || null,
+      metadata: metadata || {},
+      time_on_previous_page: time_on_previous_page || null,
+      created_at: new Date().toISOString(),
+    });
+
+    // Update last_active + increment page_count on page_view
+    const updates: Record<string, unknown> = { last_active_at: new Date().toISOString() };
+    await supabase.from('user_sessions').update(updates).eq('id', session_id);
+    if (event_type === 'page_view') {
+      const { data: sess } = await supabase.from('user_sessions').select('page_count').eq('id', session_id).single();
+      if (sess) await supabase.from('user_sessions').update({ page_count: ((sess as { page_count: number }).page_count || 0) + 1 }).eq('id', session_id);
+    }
+
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : 'error' });
+  }
+});
+
+// POST /api/sessions/end — mark session as ended
+app.post('/api/sessions/end', async (req: Request, res: Response) => {
+  try {
+    const supabase = getSupabase();
+    const { session_id, last_page, time_on_last_page } = req.body as Record<string, unknown>;
+    if (!session_id) { res.status(400).json({ error: 'session_id required' }); return; }
+
+    const { data: sess } = await supabase.from('user_sessions').select('started_at').eq('id', session_id).single();
+    const duration = sess ? Math.round((Date.now() - new Date((sess as { started_at: string }).started_at).getTime()) / 1000) : 0;
+
+    if (last_page) {
+      await supabase.from('session_events').insert({
+        session_id, event_type: 'logout',
+        page: last_page, time_on_previous_page: time_on_last_page || 0,
+        created_at: new Date().toISOString(),
+      });
+    }
+    await supabase.from('user_sessions').update({
+      ended_at: new Date().toISOString(),
+      duration_seconds: duration,
+      is_active: false,
+    }).eq('id', session_id);
+
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : 'error' });
+  }
+});
+
+// ─── Admin routes (require auth) ──────────────────────────────────────────────
+
+// GET /api/admin/sessions — list all sessions
+app.get('/api/admin/sessions', authMiddleware, async (req: Request, res: Response) => {
+  try {
+    const supabase = getSupabase();
+    const { limit = '100', offset = '0', user_name, date_from, date_to } = req.query as Record<string, string>;
+
+    let query = supabase
+      .from('user_sessions')
+      .select('*', { count: 'exact' })
+      .order('started_at', { ascending: false })
+      .range(Number(offset), Number(offset) + Number(limit) - 1);
+
+    if (user_name) query = query.ilike('user_name', `%${user_name}%`);
+    if (date_from) query = query.gte('started_at', date_from);
+    if (date_to)   query = query.lte('started_at', date_to);
+
+    const { data, error, count } = await query;
+    if (error) { res.status(500).json({ error: error.message }); return; }
+    res.json({ data: data || [], count, statusCode: 200 });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : 'error' });
+  }
+});
+
+// GET /api/admin/sessions/:id/events — timeline for a session
+app.get('/api/admin/sessions/:id/events', authMiddleware, async (req: Request, res: Response) => {
+  try {
+    const supabase = getSupabase();
+    const { data, error } = await supabase
+      .from('session_events')
+      .select('*')
+      .eq('session_id', req.params.id)
+      .order('created_at', { ascending: true });
+    if (error) { res.status(500).json({ error: error.message }); return; }
+    res.json({ data: data || [], statusCode: 200 });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : 'error' });
+  }
 });
 
 // ─── 404 & Error handlers ─────────────────────────────────────────────────────
