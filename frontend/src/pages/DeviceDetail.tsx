@@ -24,7 +24,7 @@ interface Telemetry {
   ram_percent: number;
   disk_percent: number;
   network_bytes_sec?: number;
-  recorded_at: string;
+  timestamp: string;
 }
 
 interface Command {
@@ -212,7 +212,7 @@ export default function DeviceDetail() {
             <h2 className="text-lg font-semibold text-gray-800">Latest Telemetry</h2>
             {latest && (
               <span className="text-xs text-gray-400">
-                {new Date(latest.recorded_at).toLocaleTimeString()}
+                {new Date(latest.timestamp).toLocaleTimeString()}
               </span>
             )}
           </div>
@@ -249,7 +249,7 @@ export default function DeviceDetail() {
               <tbody>
                 {telemetry.map((t) => (
                   <tr key={t.id} className="border-b hover:bg-gray-50">
-                    <td className="px-4 py-2 text-gray-500">{new Date(t.recorded_at).toLocaleTimeString()}</td>
+                    <td className="px-4 py-2 text-gray-500">{new Date(t.timestamp).toLocaleTimeString()}</td>
                     <td className="px-4 py-2">
                       <span className={t.cpu_percent >= 80 ? 'text-red-600 font-semibold' : ''}>
                         {t.cpu_percent.toFixed(1)}%
