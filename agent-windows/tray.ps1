@@ -1,73 +1,80 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# RMM Agent - Icône barre des tâches
-# Lance l'agent Node.js en arrière-plan et expose un menu tray
-# Usage : powershell -ExecutionPolicy Bypass -File tray.ps1 [-AgentScript <path>]
-# ─────────────────────────────────────────────────────────────────────────────
-param(
-    [string]$AgentScript = ""
-)
+# =============================================================================
+# RMM Agent - Icone barre des taches (compatible Windows PowerShell 5.1)
+# Usage : powershell -ExecutionPolicy Bypass -File tray.ps1
+# =============================================================================
+param([string]$AgentScript = "")
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
-# ── Chemins ──────────────────────────────────────────────────────────────────
-$SCRIPT_DIR  = $PSScriptRoot
-if (-not $SCRIPT_DIR) { $SCRIPT_DIR = Split-Path -Parent $MyInvocation.MyCommand.Path }
-
-$AGENT_SCRIPT = if ($AgentScript) { $AgentScript } else {
-    # Détecter automatiquement le bon script agent
-    $candidates = @(
-        Join-Path $SCRIPT_DIR "agent-DESKTOP-IDOTISM.js",
-        Join-Path $SCRIPT_DIR "agent.js"
-    )
-    $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+# ── Chemins (script:) pour les closures WinForms ─────────────────────────────
+$script:SCRIPT_DIR = $PSScriptRoot
+if (-not $script:SCRIPT_DIR) {
+    $script:SCRIPT_DIR = Split-Path -Parent $MyInvocation.MyCommand.Path
 }
 
-$DATA_DIR = Join-Path $env:ProgramData "RMM"
-$LOG_FILE = Join-Path $DATA_DIR "agent.log"
-$PID_FILE = Join-Path $DATA_DIR "agent.pid"
+# Trouver le script agent
+if ($AgentScript -and (Test-Path $AgentScript)) {
+    $script:AGENT_SCRIPT = $AgentScript
+} else {
+    $c1 = (Join-Path $script:SCRIPT_DIR "agent-DESKTOP-IDOTISM.js")
+    $c2 = (Join-Path $script:SCRIPT_DIR "agent.js")
+    if     (Test-Path $c1) { $script:AGENT_SCRIPT = $c1 }
+    elseif (Test-Path $c2) { $script:AGENT_SCRIPT = $c2 }
+    else                   { $script:AGENT_SCRIPT = "" }
+}
 
-if (-not (Test-Path $DATA_DIR)) { New-Item -ItemType Directory -Path $DATA_DIR -Force | Out-Null }
+$script:DATA_DIR = Join-Path $env:ProgramData "RMM"
+$script:LOG_FILE = Join-Path $script:DATA_DIR "agent.log"
+$script:PID_FILE = Join-Path $script:DATA_DIR "agent.pid"
 
-# ── Trouver node.exe (compatible PowerShell 5.1) ─────────────────────────────
+if (-not (Test-Path $script:DATA_DIR)) {
+    New-Item -ItemType Directory -Path $script:DATA_DIR -Force | Out-Null
+}
+
+# ── Trouver node.exe ──────────────────────────────────────────────────────────
 function Find-NodeExe {
-    $list = [System.Collections.Generic.List[string]]::new()
     $gcmd = Get-Command "node.exe" -ErrorAction SilentlyContinue
-    if ($gcmd) { $list.Add($gcmd.Source) }
-    $list.Add("$env:ProgramFiles\nodejs\node.exe")
-    $list.Add("$env:LOCALAPPDATA\Programs\nodejs\node.exe")
-    $found = $list | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
-    if ($found) { return $found }
+    if ($gcmd -and (Test-Path $gcmd.Source)) { return $gcmd.Source }
+    $p1 = "$env:ProgramFiles\nodejs\node.exe"
+    $p2 = "$env:LOCALAPPDATA\Programs\nodejs\node.exe"
+    if (Test-Path $p1) { return $p1 }
+    if (Test-Path $p2) { return $p2 }
     return "node.exe"
 }
-$NODE_EXE = Find-NodeExe
+$script:NODE_EXE = Find-NodeExe
 
 # ── Gestion du processus agent ────────────────────────────────────────────────
 function Get-AgentProc {
-    if (Test-Path $PID_FILE) {
-        $pidVal = Get-Content $PID_FILE -ErrorAction SilentlyContinue
+    if (Test-Path $script:PID_FILE) {
+        $pidVal = Get-Content $script:PID_FILE -ErrorAction SilentlyContinue
         if ($pidVal -match '^\d+$') {
-            return Get-Process -Id ([int]$pidVal) -ErrorAction SilentlyContinue
+            $proc = Get-Process -Id ([int]$pidVal) -ErrorAction SilentlyContinue
+            return $proc
         }
     }
     return $null
 }
 
 function Start-AgentProc {
-    if (-not $AGENT_SCRIPT -or -not (Test-Path $AGENT_SCRIPT)) {
+    if (-not $script:AGENT_SCRIPT -or -not (Test-Path $script:AGENT_SCRIPT)) {
         [System.Windows.Forms.MessageBox]::Show(
-            "Script agent introuvable :`n$AGENT_SCRIPT",
-            "RMM Agent - Erreur", "OK", "Error") | Out-Null
+            "Script agent introuvable :`n$($script:AGENT_SCRIPT)",
+            "RMM Agent - Erreur",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Error
+        ) | Out-Null
         return $null
     }
-    $proc = Start-Process -FilePath $NODE_EXE `
-        -ArgumentList "`"$AGENT_SCRIPT`"" `
-        -WorkingDirectory $SCRIPT_DIR `
+    $proc = Start-Process `
+        -FilePath $script:NODE_EXE `
+        -ArgumentList "`"$($script:AGENT_SCRIPT)`"" `
+        -WorkingDirectory $script:SCRIPT_DIR `
         -WindowStyle Hidden `
         -PassThru
     Start-Sleep -Milliseconds 800
     if ($proc -and -not $proc.HasExited) {
-        Set-Content -Path $PID_FILE -Value $proc.Id -Encoding UTF8
+        Set-Content -Path $script:PID_FILE -Value $proc.Id -Encoding UTF8
         return $proc
     }
     return $null
@@ -79,38 +86,32 @@ function Stop-AgentProc {
         try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch {}
         Start-Sleep -Milliseconds 400
     }
-    Remove-Item $PID_FILE -ErrorAction SilentlyContinue
+    Remove-Item $script:PID_FILE -ErrorAction SilentlyContinue
 }
 
-# ── Icône (extraite de shell32.dll icon #77 = moniteur) ─────────────────────
+# ── Icone (shell32.dll) ───────────────────────────────────────────────────────
 function Get-TrayIcon {
     try {
-        # Moniteur vert / application icon depuis shell32
-        $iconIndex = 77   # moniteur écran plat dans shell32
         $shell32 = "$env:SystemRoot\System32\shell32.dll"
-        Add-Type -MemberDefinition @'
-[DllImport("shell32.dll", CharSet=CharSet.Auto)]
-public static extern IntPtr ExtractIcon(IntPtr hInst, string lpszExeFileName, int nIconIndex);
-'@ -Name Shell32 -Namespace Win32 -ErrorAction SilentlyContinue
-        $hIcon = [Win32.Shell32]::ExtractIcon([IntPtr]::Zero, $shell32, $iconIndex)
+        Add-Type -MemberDefinition '[DllImport("shell32.dll",CharSet=CharSet.Auto)] public static extern IntPtr ExtractIcon(IntPtr h,string f,int i);' `
+            -Name Shell32 -Namespace Win32 -ErrorAction SilentlyContinue
+        $hIcon = [Win32.Shell32]::ExtractIcon([IntPtr]::Zero, $shell32, 15)
         if ($hIcon -ne [IntPtr]::Zero) {
             return [System.Drawing.Icon]::FromHandle($hIcon)
         }
     } catch {}
-    # Fallback : icône application système
     return [System.Drawing.SystemIcons]::Application
 }
 
-# ── Créer la NotifyIcon ────────────────────────────────────────────────────────
-$tray = New-Object System.Windows.Forms.NotifyIcon
-$tray.Icon    = Get-TrayIcon
-$tray.Text    = "RMM Agent"
-$tray.Visible = $true
+# ── NotifyIcon ────────────────────────────────────────────────────────────────
+$script:tray = New-Object System.Windows.Forms.NotifyIcon
+$script:tray.Icon    = Get-TrayIcon
+$script:tray.Text    = "RMM Agent"
+$script:tray.Visible = $true
 
-# ── Menu contextuel ────────────────────────────────────────────────────────────
+# ── Menu ──────────────────────────────────────────────────────────────────────
 $menu = New-Object System.Windows.Forms.ContextMenuStrip
 
-# Titre (non cliquable)
 $itemTitle = New-Object System.Windows.Forms.ToolStripMenuItem
 $itemTitle.Text    = "RMM Agent"
 $itemTitle.Enabled = $false
@@ -118,92 +119,98 @@ $itemTitle.Font    = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawi
 
 $sep1 = New-Object System.Windows.Forms.ToolStripSeparator
 
-# Voir les logs
-$itemLogs = New-Object System.Windows.Forms.ToolStripMenuItem
-$itemLogs.Text = "   Voir le suivi (logs)"
-$itemLogs.Add_Click({
-    if (Test-Path $LOG_FILE) {
-        # Ouvre une fenêtre PowerShell qui suit le log en temps réel
-        $cmd = "& { `$host.UI.RawUI.WindowTitle = 'RMM Agent - Suivi'; " +
-               "Write-Host '=== RMM Agent - Logs en temps reel ===' -ForegroundColor Cyan; " +
-               "Get-Content -Path '$LOG_FILE' -Wait -Tail 80 }"
-        Start-Process powershell -ArgumentList "-NoProfile -NoExit -Command $cmd" -WindowStyle Normal
+# -- Voir les logs
+$script:itemLogs = New-Object System.Windows.Forms.ToolStripMenuItem
+$script:itemLogs.Text = "  Voir le suivi (logs)"
+$script:itemLogs.Add_Click({
+    if (Test-Path $script:LOG_FILE) {
+        $logPath = $script:LOG_FILE
+        $args = "-NoProfile -NoExit -Command `"& { `$host.UI.RawUI.WindowTitle='RMM Agent - Suivi'; Get-Content -Path '$logPath' -Wait -Tail 80 }`""
+        Start-Process powershell -ArgumentList $args -WindowStyle Normal
     } else {
         [System.Windows.Forms.MessageBox]::Show(
             "Aucun log disponible.`nL'agent n'a pas encore ecrit de log.",
-            "RMM Agent", "OK", "Information") | Out-Null
+            "RMM Agent",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Information
+        ) | Out-Null
     }
 })
 
-# Relancer
-$itemRestart = New-Object System.Windows.Forms.ToolStripMenuItem
-$itemRestart.Text = "   Relancer l'agent"
-$itemRestart.Add_Click({
-    $itemRestart.Enabled = $false
-    $itemRestart.Text = "   Relance en cours..."
+# -- Relancer
+$script:itemRestart = New-Object System.Windows.Forms.ToolStripMenuItem
+$script:itemRestart.Text = "  Relancer l'agent"
+$script:itemRestart.Add_Click({
+    $script:itemRestart.Enabled = $false
+    $script:itemRestart.Text    = "  Relance en cours..."
     Stop-AgentProc
     Start-Sleep -Milliseconds 1000
     $proc = Start-AgentProc
-    $itemRestart.Enabled = $true
-    $itemRestart.Text = "   Relancer l'agent"
+    $script:itemRestart.Enabled = $true
+    $script:itemRestart.Text    = "  Relancer l'agent"
     if ($proc) {
-        $tray.ShowBalloonTip(3000, "RMM Agent", "Agent relance (PID $($proc.Id))", [System.Windows.Forms.ToolTipIcon]::Info)
-        $tray.Text = "RMM Agent - PID $($proc.Id)"
+        $script:tray.Text = "RMM Agent - PID $($proc.Id)"
+        $script:tray.ShowBalloonTip(3000, "RMM Agent", "Agent relance (PID $($proc.Id))", [System.Windows.Forms.ToolTipIcon]::Info)
     } else {
-        $tray.ShowBalloonTip(3000, "RMM Agent", "Erreur au demarrage de l'agent", [System.Windows.Forms.ToolTipIcon]::Error)
+        $script:tray.ShowBalloonTip(3000, "RMM Agent", "Erreur au demarrage !", [System.Windows.Forms.ToolTipIcon]::Error)
     }
 })
 
 $sep2 = New-Object System.Windows.Forms.ToolStripSeparator
 
-# Quitter
+# -- Quitter
 $itemQuit = New-Object System.Windows.Forms.ToolStripMenuItem
-$itemQuit.Text = "   Quitter"
+$itemQuit.Text = "  Quitter"
 $itemQuit.Add_Click({
     Stop-AgentProc
-    $tray.Visible = $false
-    $tray.Dispose()
+    $script:tray.Visible = $false
+    $script:tray.Dispose()
     [System.Windows.Forms.Application]::Exit()
 })
 
-$menu.Items.AddRange(@($itemTitle, $sep1, $itemLogs, $itemRestart, $sep2, $itemQuit))
-$tray.ContextMenuStrip = $menu
+$menu.Items.Add($itemTitle)  | Out-Null
+$menu.Items.Add($sep1)       | Out-Null
+$menu.Items.Add($script:itemLogs)    | Out-Null
+$menu.Items.Add($script:itemRestart) | Out-Null
+$menu.Items.Add($sep2)       | Out-Null
+$menu.Items.Add($itemQuit)   | Out-Null
+$script:tray.ContextMenuStrip = $menu
 
-# Double-clic = ouvrir les logs directement
-$tray.Add_DoubleClick({
-    $itemLogs.PerformClick()
+# Double-clic = logs
+$script:tray.Add_DoubleClick({
+    $script:itemLogs.PerformClick()
 })
 
-# ── Démarrer l'agent si pas déjà actif ────────────────────────────────────────
+# ── Demarrer l'agent au lancement ─────────────────────────────────────────────
 $existingProc = Get-AgentProc
 if (-not $existingProc) {
     $proc = Start-AgentProc
     if ($proc) {
-        $tray.Text = "RMM Agent - PID $($proc.Id)"
-        $tray.ShowBalloonTip(3000, "RMM Agent", "Agent demarre (PID $($proc.Id))", [System.Windows.Forms.ToolTipIcon]::Info)
+        $script:tray.Text = "RMM Agent - PID $($proc.Id)"
+        $script:tray.ShowBalloonTip(3000, "RMM Agent", "Agent demarre (PID $($proc.Id))", [System.Windows.Forms.ToolTipIcon]::Info)
     } else {
-        $tray.ShowBalloonTip(3000, "RMM Agent", "Impossible de demarrer l'agent !", [System.Windows.Forms.ToolTipIcon]::Error)
+        $script:tray.ShowBalloonTip(4000, "RMM Agent", "Impossible de demarrer l'agent !", [System.Windows.Forms.ToolTipIcon]::Error)
     }
 } else {
-    $tray.Text = "RMM Agent - PID $($existingProc.Id)"
-    $tray.ShowBalloonTip(2000, "RMM Agent", "Agent deja actif (PID $($existingProc.Id))", [System.Windows.Forms.ToolTipIcon]::Info)
+    $script:tray.Text = "RMM Agent - PID $($existingProc.Id)"
+    $script:tray.ShowBalloonTip(2000, "RMM Agent", "Agent deja actif (PID $($existingProc.Id))", [System.Windows.Forms.ToolTipIcon]::Info)
 }
 
-# ── Watchdog : verifier que l'agent tourne toujours (toutes les 30s) ──────────
-$timer = New-Object System.Windows.Forms.Timer
-$timer.Interval = 30000
-$timer.Add_Tick({
+# ── Watchdog toutes les 30s ───────────────────────────────────────────────────
+$script:watchdog = New-Object System.Windows.Forms.Timer
+$script:watchdog.Interval = 30000
+$script:watchdog.Add_Tick({
     $proc = Get-AgentProc
     if (-not $proc) {
-        $tray.Text = "RMM Agent - ARRETE"
-        $tray.ShowBalloonTip(4000, "RMM Agent", "Agent arrete ! Redemarrage automatique...", [System.Windows.Forms.ToolTipIcon]::Warning)
+        $script:tray.Text = "RMM Agent - ARRETE"
+        $script:tray.ShowBalloonTip(4000, "RMM Agent", "Agent arrete ! Redemarrage...", [System.Windows.Forms.ToolTipIcon]::Warning)
         $newProc = Start-AgentProc
-        if ($newProc) { $tray.Text = "RMM Agent - PID $($newProc.Id)" }
+        if ($newProc) { $script:tray.Text = "RMM Agent - PID $($newProc.Id)" }
     } else {
-        $tray.Text = "RMM Agent - PID $($proc.Id)"
+        $script:tray.Text = "RMM Agent - PID $($proc.Id)"
     }
 })
-$timer.Start()
+$script:watchdog.Start()
 
-# ── Boucle Windows Forms ───────────────────────────────────────────────────────
+# ── Boucle principale ─────────────────────────────────────────────────────────
 [System.Windows.Forms.Application]::Run()
