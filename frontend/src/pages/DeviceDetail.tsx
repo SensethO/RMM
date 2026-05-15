@@ -212,7 +212,7 @@ export default function DeviceDetail() {
             <h2 className="text-lg font-semibold text-gray-800">Latest Telemetry</h2>
             {latest && (
               <span className="text-xs text-gray-400">
-                {new Date(latest.timestamp).toLocaleTimeString()}
+                {new Date(latest.timestamp).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })}
               </span>
             )}
           </div>
@@ -249,7 +249,7 @@ export default function DeviceDetail() {
               <tbody>
                 {telemetry.map((t) => (
                   <tr key={t.id} className="border-b hover:bg-gray-50">
-                    <td className="px-4 py-2 text-gray-500">{new Date(t.timestamp).toLocaleTimeString()}</td>
+                    <td className="px-4 py-2 text-gray-500 text-xs">{new Date(t.timestamp).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })}</td>
                     <td className="px-4 py-2">
                       <span className={t.cpu_percent >= 80 ? 'text-red-600 font-semibold' : ''}>
                         {t.cpu_percent.toFixed(1)}%
@@ -518,7 +518,7 @@ function NetworkSection({ deviceId }: { deviceId: string }) {
         )}
         {netInfo && (
           <p className="text-xs text-gray-400 mt-3">
-            Mis à jour {new Date(netInfo.timestamp).toLocaleTimeString()}
+            Mis à jour {new Date(netInfo.timestamp).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
           </p>
         )}
       </div>
