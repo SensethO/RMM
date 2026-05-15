@@ -22,27 +22,27 @@ schtasks /end    /tn "RMM-Agent-Tray" > nul 2>&1
 schtasks /delete /tn "RMM-Agent-Tray" /f > nul 2>&1
 echo        OK.
 
-:: ── 2. Tuer le watchdog start-agent.bat (boucle cmd.exe) ────────────────────
-echo [2/5] Arret du watchdog start-agent.bat...
-:: Tuer via WMIC les cmd.exe qui ont "start-agent" dans leur ligne de commande
-wmic process where "name='cmd.exe' and commandline like '%%start-agent%%'" delete > nul 2>&1
-:: Aussi tuer via le titre de fenetre defini dans start-agent.bat
-taskkill /f /fi "WINDOWTITLE eq RMM Agent*" > nul 2>&1
-:: Attendre que les processus soient bien morts
-timeout /t 2 /nobreak > nul
-echo        OK.
+:: ── 2. Tout arreter proprement ───────────────────────────────────────────────
+echo [2/5] Arret de tous les processus RMM...
 
-:: ── 3. Tuer tous les node.exe en cours ──────────────────────────────────────
-echo [3/5] Arret de tous les processus node.exe...
+:: Tuer les tray PowerShell existantes
+wmic process where "name='powershell.exe' and commandline like '%%tray.ps1%%'" delete > nul 2>&1
+wmic process where "name='powershell.exe' and commandline like '%%tray%%'"     delete > nul 2>&1
+
+:: Tuer les lanceurs wscript (start-agent.vbs)
+wmic process where "name='wscript.exe' and commandline like '%%start-agent%%'" delete > nul 2>&1
+
+:: Tuer le watchdog start-agent.bat (boucle cmd.exe)
+wmic process where "name='cmd.exe' and commandline like '%%start-agent%%'" delete > nul 2>&1
+taskkill /f /fi "WINDOWTITLE eq RMM Agent*" > nul 2>&1
+
+timeout /t 2 /nobreak > nul
+
+:: Tuer tous les node.exe
 taskkill /f /im node.exe > nul 2>&1
 timeout /t 2 /nobreak > nul
-:: Verifier qu'il n'en reste plus
-tasklist /fi "imagename eq node.exe" 2>nul | findstr /i "node.exe" > nul
-if %ERRORLEVEL% EQU 0 (
-    echo        Encore des node.exe, nouvelle tentative...
-    taskkill /f /im node.exe > nul 2>&1
-    timeout /t 2 /nobreak > nul
-)
+taskkill /f /im node.exe > nul 2>&1
+timeout /t 1 /nobreak > nul
 echo        OK.
 
 :: ── 4. Installer la nouvelle tache planifiee (tray au boot) ─────────────────

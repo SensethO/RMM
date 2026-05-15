@@ -4,6 +4,24 @@
 # =============================================================================
 param([string]$AgentScript = "")
 
+# ── Single-instance : une seule tray a la fois ───────────────────────────────
+$script:TRAY_LOCK = Join-Path $env:TEMP "rmm-tray.lock"
+$myPid = $PID
+# Si un autre tray.ps1 tourne deja, quitter
+$others = Get-Process -Name "powershell" -ErrorAction SilentlyContinue |
+    Where-Object { $_.Id -ne $myPid }
+foreach ($p in $others) {
+    try {
+        $cmd = (Get-WmiObject Win32_Process -Filter "ProcessId=$($p.Id)" -ErrorAction SilentlyContinue).CommandLine
+        if ($cmd -and $cmd -like "*tray.ps1*") {
+            Write-Host "Une instance tray est deja active (PID $($p.Id)). Fermeture."
+            exit 0
+        }
+    } catch {}
+}
+# Ecrire notre PID dans le lock
+Set-Content -Path $script:TRAY_LOCK -Value $myPid -Encoding UTF8
+
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
