@@ -43,7 +43,7 @@ const CONFIG = {
   backend:   'https://backend-xi-one-36.vercel.app',
   username:  'admin',
   password:  'demo123',
-  tenant_id: '', // Laisser vide → tenant démo | Renseigner l'UUID Supabase du tenant client
+  tenant_id: '045edce4-dacf-4d85-a27c-46b1608e0282', // SCDB PRO SARL
 };
 
 // Paramètres actifs (mis à jour depuis le backend)
