@@ -29,14 +29,16 @@ $PID_FILE = Join-Path $DATA_DIR "agent.pid"
 
 if (-not (Test-Path $DATA_DIR)) { New-Item -ItemType Directory -Path $DATA_DIR -Force | Out-Null }
 
-# ── Trouver node.exe ──────────────────────────────────────────────────────────
+# ── Trouver node.exe (compatible PowerShell 5.1) ─────────────────────────────
 function Find-NodeExe {
-    $candidates = @(
-        (Get-Command "node.exe" -ErrorAction SilentlyContinue)?.Source,
-        "$env:ProgramFiles\nodejs\node.exe",
-        "$env:LOCALAPPDATA\Programs\nodejs\node.exe"
-    ) | Where-Object { $_ -and (Test-Path $_) }
-    return ($candidates | Select-Object -First 1) ?? "node.exe"
+    $list = [System.Collections.Generic.List[string]]::new()
+    $gcmd = Get-Command "node.exe" -ErrorAction SilentlyContinue
+    if ($gcmd) { $list.Add($gcmd.Source) }
+    $list.Add("$env:ProgramFiles\nodejs\node.exe")
+    $list.Add("$env:LOCALAPPDATA\Programs\nodejs\node.exe")
+    $found = $list | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+    if ($found) { return $found }
+    return "node.exe"
 }
 $NODE_EXE = Find-NodeExe
 
