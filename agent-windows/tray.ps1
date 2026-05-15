@@ -13,15 +13,21 @@ if (-not $script:SCRIPT_DIR) {
     $script:SCRIPT_DIR = Split-Path -Parent $MyInvocation.MyCommand.Path
 }
 
-# Trouver le script agent
+# Trouver le script agent (cherche dans l'ordre : nom du PC, générique)
 if ($AgentScript -and (Test-Path $AgentScript)) {
     $script:AGENT_SCRIPT = $AgentScript
 } else {
-    $c1 = (Join-Path $script:SCRIPT_DIR "agent-DESKTOP-IDOTISM.js")
-    $c2 = (Join-Path $script:SCRIPT_DIR "agent.js")
-    if     (Test-Path $c1) { $script:AGENT_SCRIPT = $c1 }
-    elseif (Test-Path $c2) { $script:AGENT_SCRIPT = $c2 }
-    else                   { $script:AGENT_SCRIPT = "" }
+    # Nom du PC courant pour matcher automatiquement le bon script
+    $pcName = $env:COMPUTERNAME
+    $c_pc   = (Join-Path $script:SCRIPT_DIR "agent-$pcName.js")
+    $c1     = (Join-Path $script:SCRIPT_DIR "agent-DESKTOP-IDOTISM.js")
+    $c2     = (Join-Path $script:SCRIPT_DIR "agent-Isno-Surf9.js")
+    $c3     = (Join-Path $script:SCRIPT_DIR "agent.js")
+    if     (Test-Path $c_pc) { $script:AGENT_SCRIPT = $c_pc }
+    elseif (Test-Path $c1)   { $script:AGENT_SCRIPT = $c1 }
+    elseif (Test-Path $c2)   { $script:AGENT_SCRIPT = $c2 }
+    elseif (Test-Path $c3)   { $script:AGENT_SCRIPT = $c3 }
+    else                     { $script:AGENT_SCRIPT = "" }
 }
 
 $script:DATA_DIR = Join-Path $env:ProgramData "RMM"
