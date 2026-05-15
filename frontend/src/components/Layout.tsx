@@ -15,14 +15,16 @@ export default function Layout({ children }: LayoutProps) {
   };
 
   const navItems = [
-    { href: '/', label: 'Dashboard', icon: '📊' },
-    { href: '/devices', label: 'Devices', icon: '💻' },
-    { href: '/commands', label: 'Commands', icon: '⚙️' },
-    { href: '/alerts', label: 'Alerts', icon: '🚨' },
-    { href: '/deploy', label: 'Déploiements', icon: '🚀' },
-    { href: '/monitor', label: 'Monitor', icon: '📡' },
-    { href: '/versions', label: 'Versions', icon: '🔖' },
-    { href: '/settings', label: 'Settings', icon: '⚙️' },
+    { href: '/',              label: 'Dashboard',      icon: '📊', group: 'main' },
+    { href: '/devices',       label: 'Appareils',      icon: '💻', group: 'main' },
+    { href: '/deploy',        label: 'Déploiements',   icon: '🚀', group: 'main' },
+    { href: '/commands',      label: 'Commandes',      icon: '⚙️', group: 'main' },
+    { href: '/monitor',       label: 'Monitor',        icon: '📡', group: 'main' },
+    { href: '/organization',  label: 'Organisation',   icon: '🏢', group: 'org'  },
+    { href: '/microsoft365',  label: 'Microsoft 365',  icon: '🔷', group: 'org'  },
+    { href: '/alerts',        label: 'Alertes',        icon: '🚨', group: 'sys'  },
+    { href: '/versions',      label: 'Versions',       icon: '🔖', group: 'sys'  },
+    { href: '/settings',      label: 'Paramètres',     icon: '⚙️', group: 'sys'  },
   ];
 
   const isActive = (href: string) =>
@@ -37,15 +39,30 @@ export default function Layout({ children }: LayoutProps) {
           <p className="text-blue-200 text-sm mt-1">Remote Management</p>
         </div>
 
-        <nav className="mt-6 flex-1">
-          {navItems.map((item) => (
-            <Link
-              key={item.href}
-              to={item.href}
-              className={`flex items-center px-6 py-3 text-white hover:bg-blue-700 transition ${isActive(item.href)}`}
-            >
-              <span className="mr-3 text-lg">{item.icon}</span>
-              <span>{item.label}</span>
+        <nav className="mt-4 flex-1 overflow-y-auto">
+          {/* Main group */}
+          {navItems.filter(i => i.group === 'main').map((item) => (
+            <Link key={item.href} to={item.href}
+              className={`flex items-center px-6 py-2.5 text-white hover:bg-blue-700 transition text-sm ${isActive(item.href)}`}>
+              <span className="mr-3">{item.icon}</span><span>{item.label}</span>
+            </Link>
+          ))}
+          {/* Org group */}
+          <div className="mx-4 my-2 border-t border-blue-500 opacity-40" />
+          <p className="px-6 py-1 text-xs text-blue-300 uppercase tracking-wide font-semibold">Organisation</p>
+          {navItems.filter(i => i.group === 'org').map((item) => (
+            <Link key={item.href} to={item.href}
+              className={`flex items-center px-6 py-2.5 text-white hover:bg-blue-700 transition text-sm ${isActive(item.href)}`}>
+              <span className="mr-3">{item.icon}</span><span>{item.label}</span>
+            </Link>
+          ))}
+          {/* System group */}
+          <div className="mx-4 my-2 border-t border-blue-500 opacity-40" />
+          <p className="px-6 py-1 text-xs text-blue-300 uppercase tracking-wide font-semibold">Système</p>
+          {navItems.filter(i => i.group === 'sys').map((item) => (
+            <Link key={item.href} to={item.href}
+              className={`flex items-center px-6 py-2.5 text-white hover:bg-blue-700 transition text-sm ${isActive(item.href)}`}>
+              <span className="mr-3">{item.icon}</span><span>{item.label}</span>
             </Link>
           ))}
         </nav>
@@ -73,7 +90,7 @@ export default function Layout({ children }: LayoutProps) {
         <header className="bg-white shadow">
           <div className="px-8 py-4">
             <h2 className="text-2xl font-bold text-gray-800">
-              {navItems.find((item) => item.href === location.pathname)?.label || 'Dashboard'}
+              {navItems.find((item) => item.href === location.pathname || (item.href !== '/' && location.pathname.startsWith(item.href)))?.label || 'Dashboard'}
             </h2>
           </div>
         </header>

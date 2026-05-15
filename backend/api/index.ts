@@ -534,6 +534,214 @@ app.get('/api/deploy/history', async (req: Request, res: Response) => {
   } catch (err) { logger.error('Deploy history error:', err); res.status(500).json({ error: 'Internal server error' }); }
 });
 
+// ─── Organizations ────────────────────────────────────────────────────────────
+const orgsRouter = express.Router();
+orgsRouter.get('/', async (req, res) => {
+  if (!req.tenant) { res.status(401).json({ error: 'Missing tenant context' }); return; }
+  try {
+    const { data, error } = await getSupabase().from('organizations').select('*').eq('tenant_id', req.tenant.id).order('name');
+    if (error) throw error;
+    res.json({ data: data || [], statusCode: 200 });
+  } catch { res.status(500).json({ error: 'Failed to fetch organizations' }); }
+});
+orgsRouter.post('/', async (req, res) => {
+  if (!req.tenant) { res.status(401).json({ error: 'Missing tenant context' }); return; }
+  const { name, type, description, address, city, country, phone, website } = req.body as Record<string, string>;
+  if (!name) { res.status(400).json({ error: 'Missing required field: name' }); return; }
+  try {
+    const { data, error } = await getSupabase().from('organizations').insert({ tenant_id: req.tenant.id, name, type: type || 'company', description, address, city, country: country || 'France', phone, website, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }).select('*').single();
+    if (error) throw error;
+    res.status(201).json({ data, statusCode: 201 });
+  } catch { res.status(500).json({ error: 'Failed to create organization' }); }
+});
+orgsRouter.patch('/:id', async (req, res) => {
+  if (!req.tenant) { res.status(401).json({ error: 'Missing tenant context' }); return; }
+  try {
+    const { data, error } = await getSupabase().from('organizations').update({ ...req.body as Record<string, unknown>, updated_at: new Date().toISOString() }).eq('tenant_id', req.tenant.id).eq('id', req.params.id).select('*').single();
+    if (error || !data) { res.status(404).json({ error: 'Organization not found' }); return; }
+    res.json({ data, statusCode: 200 });
+  } catch { res.status(500).json({ error: 'Failed to update organization' }); }
+});
+orgsRouter.delete('/:id', async (req, res) => {
+  if (!req.tenant) { res.status(401).json({ error: 'Missing tenant context' }); return; }
+  try { await getSupabase().from('organizations').delete().eq('tenant_id', req.tenant.id).eq('id', req.params.id); res.json({ statusCode: 200 }); }
+  catch { res.status(500).json({ error: 'Failed to delete organization' }); }
+});
+app.use('/api/organizations', orgsRouter);
+
+// ─── Sites ────────────────────────────────────────────────────────────────────
+const sitesRouter = express.Router();
+sitesRouter.get('/', async (req, res) => {
+  if (!req.tenant) { res.status(401).json({ error: 'Missing tenant context' }); return; }
+  try {
+    const { data, error } = await getSupabase().from('sites').select('*').eq('tenant_id', req.tenant.id).order('name');
+    if (error) throw error;
+    res.json({ data: data || [], statusCode: 200 });
+  } catch { res.status(500).json({ error: 'Failed to fetch sites' }); }
+});
+sitesRouter.post('/', async (req, res) => {
+  if (!req.tenant) { res.status(401).json({ error: 'Missing tenant context' }); return; }
+  const { name, organization_id, address, city, postal_code, country } = req.body as Record<string, string>;
+  if (!name) { res.status(400).json({ error: 'Missing required field: name' }); return; }
+  try {
+    const { data, error } = await getSupabase().from('sites').insert({ tenant_id: req.tenant.id, organization_id: organization_id || null, name, address, city, postal_code, country: country || 'France', created_at: new Date().toISOString(), updated_at: new Date().toISOString() }).select('*').single();
+    if (error) throw error;
+    res.status(201).json({ data, statusCode: 201 });
+  } catch { res.status(500).json({ error: 'Failed to create site' }); }
+});
+sitesRouter.patch('/:id', async (req, res) => {
+  if (!req.tenant) { res.status(401).json({ error: 'Missing tenant context' }); return; }
+  try {
+    const { data, error } = await getSupabase().from('sites').update({ ...req.body as Record<string, unknown>, updated_at: new Date().toISOString() }).eq('tenant_id', req.tenant.id).eq('id', req.params.id).select('*').single();
+    if (error || !data) { res.status(404).json({ error: 'Site not found' }); return; }
+    res.json({ data, statusCode: 200 });
+  } catch { res.status(500).json({ error: 'Failed to update site' }); }
+});
+sitesRouter.delete('/:id', async (req, res) => {
+  if (!req.tenant) { res.status(401).json({ error: 'Missing tenant context' }); return; }
+  try { await getSupabase().from('sites').delete().eq('tenant_id', req.tenant.id).eq('id', req.params.id); res.json({ statusCode: 200 }); }
+  catch { res.status(500).json({ error: 'Failed to delete site' }); }
+});
+app.use('/api/sites', sitesRouter);
+
+// ─── Departments ──────────────────────────────────────────────────────────────
+const depsRouter = express.Router();
+depsRouter.get('/', async (req, res) => {
+  if (!req.tenant) { res.status(401).json({ error: 'Missing tenant context' }); return; }
+  try {
+    const { data, error } = await getSupabase().from('departments').select('*').eq('tenant_id', req.tenant.id).order('name');
+    if (error) throw error;
+    res.json({ data: data || [], statusCode: 200 });
+  } catch { res.status(500).json({ error: 'Failed to fetch departments' }); }
+});
+depsRouter.post('/', async (req, res) => {
+  if (!req.tenant) { res.status(401).json({ error: 'Missing tenant context' }); return; }
+  const { name, organization_id, site_id, description } = req.body as Record<string, string>;
+  if (!name) { res.status(400).json({ error: 'Missing required field: name' }); return; }
+  try {
+    const { data, error } = await getSupabase().from('departments').insert({ tenant_id: req.tenant.id, organization_id: organization_id || null, site_id: site_id || null, name, description, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }).select('*').single();
+    if (error) throw error;
+    res.status(201).json({ data, statusCode: 201 });
+  } catch { res.status(500).json({ error: 'Failed to create department' }); }
+});
+depsRouter.patch('/:id', async (req, res) => {
+  if (!req.tenant) { res.status(401).json({ error: 'Missing tenant context' }); return; }
+  try {
+    const { data, error } = await getSupabase().from('departments').update({ ...req.body as Record<string, unknown>, updated_at: new Date().toISOString() }).eq('tenant_id', req.tenant.id).eq('id', req.params.id).select('*').single();
+    if (error || !data) { res.status(404).json({ error: 'Department not found' }); return; }
+    res.json({ data, statusCode: 200 });
+  } catch { res.status(500).json({ error: 'Failed to update department' }); }
+});
+depsRouter.delete('/:id', async (req, res) => {
+  if (!req.tenant) { res.status(401).json({ error: 'Missing tenant context' }); return; }
+  try { await getSupabase().from('departments').delete().eq('tenant_id', req.tenant.id).eq('id', req.params.id); res.json({ statusCode: 200 }); }
+  catch { res.status(500).json({ error: 'Failed to delete department' }); }
+});
+app.use('/api/departments', depsRouter);
+
+// ─── Device assignment (org / site / dept / notes) ────────────────────────────
+app.patch('/api/devices/:id/assignment', async (req: Request, res: Response) => {
+  if (!req.tenant) { res.status(401).json({ error: 'Missing tenant context' }); return; }
+  try {
+    const { organization_id, site_id, department_id, notes } = req.body as Record<string, string | null>;
+    const { data, error } = await getSupabase().from('devices').update({ organization_id: organization_id || null, site_id: site_id || null, department_id: department_id || null, notes, updated_at: new Date().toISOString() }).eq('tenant_id', req.tenant.id).eq('id', req.params.id).select('*').single();
+    if (error || !data) { res.status(404).json({ error: 'Device not found' }); return; }
+    res.json({ data, statusCode: 200 });
+  } catch (err) { logger.error('Device assignment error:', err); res.status(500).json({ error: 'Internal server error' }); }
+});
+
+// ─── Microsoft 365 / Graph API proxy ─────────────────────────────────────────
+let _graphTokenCache: { token: string; expiresAt: number } | null = null;
+
+async function getGraphToken(): Promise<string | null> {
+  if (_graphTokenCache && Date.now() < _graphTokenCache.expiresAt - 60_000) return _graphTokenCache.token;
+  const tenantId = process.env.AZURE_TENANT_ID;
+  const clientId = process.env.AZURE_CLIENT_ID;
+  const clientSecret = process.env.AZURE_CLIENT_SECRET;
+  if (!tenantId || !clientId || !clientSecret) return null;
+  try {
+    const r = await fetch(`https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ grant_type: 'client_credentials', client_id: clientId, client_secret: clientSecret, scope: 'https://graph.microsoft.com/.default' }).toString(),
+    });
+    const d = await r.json() as { access_token?: string; expires_in?: number };
+    if (d.access_token) { _graphTokenCache = { token: d.access_token, expiresAt: Date.now() + (d.expires_in || 3600) * 1000 }; return d.access_token; }
+  } catch { /* ignore */ }
+  return null;
+}
+
+async function graphGet(url: string, token: string): Promise<{ value?: unknown[]; error?: { message: string } }> {
+  const r = await fetch(url, { headers: { Authorization: `Bearer ${token}`, ConsistencyLevel: 'eventual' } });
+  return r.json() as Promise<{ value?: unknown[]; error?: { message: string } }>;
+}
+
+app.get('/api/microsoft365/status', async (req, res) => {
+  if (!req.tenant) { res.status(401).json({ error: 'Missing tenant context' }); return; }
+  const configured = !!(process.env.AZURE_TENANT_ID && process.env.AZURE_CLIENT_ID && process.env.AZURE_CLIENT_SECRET);
+  if (!configured) { res.json({ configured: false, statusCode: 200 }); return; }
+  const token = await getGraphToken();
+  res.json({ configured, connected: !!token, tenant_id: process.env.AZURE_TENANT_ID, statusCode: 200 });
+});
+
+app.get('/api/microsoft365/azure-devices', async (req, res) => {
+  if (!req.tenant) { res.status(401).json({ error: 'Missing tenant context' }); return; }
+  const token = await getGraphToken();
+  if (!token) { res.status(503).json({ error: 'Microsoft 365 non configuré' }); return; }
+  try {
+    const top = Math.min(parseInt(req.query.top as string) || 200, 500);
+    const d = await graphGet(`https://graph.microsoft.com/v1.0/devices?$top=${top}&$select=id,displayName,operatingSystem,operatingSystemVersion,trustType,compliant,isManaged,registrationDateTime,approximateLastSignInDateTime`, token);
+    if (d.error) { res.status(400).json({ error: d.error.message }); return; }
+    res.json({ data: d.value || [], statusCode: 200 });
+  } catch { res.status(500).json({ error: 'Erreur Graph API' }); }
+});
+
+app.get('/api/microsoft365/intune-devices', async (req, res) => {
+  if (!req.tenant) { res.status(401).json({ error: 'Missing tenant context' }); return; }
+  const token = await getGraphToken();
+  if (!token) { res.status(503).json({ error: 'Microsoft 365 non configuré' }); return; }
+  try {
+    const top = Math.min(parseInt(req.query.top as string) || 200, 500);
+    const d = await graphGet(`https://graph.microsoft.com/v1.0/deviceManagement/managedDevices?$top=${top}&$select=id,deviceName,operatingSystem,osVersion,complianceState,enrolledDateTime,lastSyncDateTime,userPrincipalName,model,manufacturer,serialNumber,managementAgent,azureADDeviceId`, token);
+    if (d.error) { res.status(400).json({ error: d.error.message }); return; }
+    res.json({ data: d.value || [], statusCode: 200 });
+  } catch { res.status(500).json({ error: 'Erreur Graph API' }); }
+});
+
+app.get('/api/microsoft365/autopilot', async (req, res) => {
+  if (!req.tenant) { res.status(401).json({ error: 'Missing tenant context' }); return; }
+  const token = await getGraphToken();
+  if (!token) { res.status(503).json({ error: 'Microsoft 365 non configuré' }); return; }
+  try {
+    const d = await graphGet('https://graph.microsoft.com/v1.0/deviceManagement/windowsAutopilotDeviceIdentities?$select=id,serialNumber,manufacturer,model,groupTag,enrollmentState,azureActiveDirectoryDeviceId,managedDeviceId', token);
+    if (d.error) { res.status(400).json({ error: d.error.message }); return; }
+    res.json({ data: d.value || [], statusCode: 200 });
+  } catch { res.status(500).json({ error: 'Erreur Graph API' }); }
+});
+
+app.get('/api/microsoft365/users', async (req, res) => {
+  if (!req.tenant) { res.status(401).json({ error: 'Missing tenant context' }); return; }
+  const token = await getGraphToken();
+  if (!token) { res.status(503).json({ error: 'Microsoft 365 non configuré' }); return; }
+  try {
+    const top = Math.min(parseInt(req.query.top as string) || 200, 500);
+    const d = await graphGet(`https://graph.microsoft.com/v1.0/users?$top=${top}&$select=id,displayName,userPrincipalName,accountEnabled,assignedLicenses,department,jobTitle,mail`, token);
+    if (d.error) { res.status(400).json({ error: d.error.message }); return; }
+    res.json({ data: d.value || [], statusCode: 200 });
+  } catch { res.status(500).json({ error: 'Erreur Graph API' }); }
+});
+
+app.get('/api/microsoft365/subscriptions', async (req, res) => {
+  if (!req.tenant) { res.status(401).json({ error: 'Missing tenant context' }); return; }
+  const token = await getGraphToken();
+  if (!token) { res.status(503).json({ error: 'Microsoft 365 non configuré' }); return; }
+  try {
+    const d = await graphGet('https://graph.microsoft.com/v1.0/subscribedSkus?$select=skuPartNumber,skuId,consumedUnits,prepaidUnits', token);
+    if (d.error) { res.status(400).json({ error: d.error.message }); return; }
+    res.json({ data: d.value || [], statusCode: 200 });
+  } catch { res.status(500).json({ error: 'Erreur Graph API' }); }
+});
+
 // ─── 404 & Error handlers ─────────────────────────────────────────────────────
 app.use((_req, res) => res.status(404).json({ error: 'Endpoint not found', statusCode: 404 }));
 

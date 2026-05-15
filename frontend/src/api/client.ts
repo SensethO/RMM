@@ -225,3 +225,34 @@ export const deployAPI = {
 export const health = {
   check: () => getApiClient().get<ApiResponse<Record<string, unknown>>>('/api/health'),
 };
+
+// Organization API (entreprises / sites / services)
+export const orgAPI = {
+  listOrgs:    () => getApiClient().get<ApiResponse<Record<string, unknown>[]>>('/api/organizations'),
+  createOrg:   (data: Record<string, unknown>) => getApiClient().post<ApiResponse<Record<string, unknown>>>('/api/organizations', data),
+  updateOrg:   (id: string, data: Record<string, unknown>) => getApiClient().patch<ApiResponse<Record<string, unknown>>>(`/api/organizations/${id}`, data),
+  deleteOrg:   (id: string) => getApiClient().delete<ApiResponse<null>>(`/api/organizations/${id}`),
+
+  listSites:   () => getApiClient().get<ApiResponse<Record<string, unknown>[]>>('/api/sites'),
+  createSite:  (data: Record<string, unknown>) => getApiClient().post<ApiResponse<Record<string, unknown>>>('/api/sites', data),
+  updateSite:  (id: string, data: Record<string, unknown>) => getApiClient().patch<ApiResponse<Record<string, unknown>>>(`/api/sites/${id}`, data),
+  deleteSite:  (id: string) => getApiClient().delete<ApiResponse<null>>(`/api/sites/${id}`),
+
+  listDepts:   () => getApiClient().get<ApiResponse<Record<string, unknown>[]>>('/api/departments'),
+  createDept:  (data: Record<string, unknown>) => getApiClient().post<ApiResponse<Record<string, unknown>>>('/api/departments', data),
+  updateDept:  (id: string, data: Record<string, unknown>) => getApiClient().patch<ApiResponse<Record<string, unknown>>>(`/api/departments/${id}`, data),
+  deleteDept:  (id: string) => getApiClient().delete<ApiResponse<null>>(`/api/departments/${id}`),
+
+  assignDevice: (deviceId: string, payload: { organization_id?: string | null; site_id?: string | null; department_id?: string | null; notes?: string }) =>
+    getApiClient().patch<ApiResponse<Record<string, unknown>>>(`/api/devices/${deviceId}/assignment`, payload),
+};
+
+// Microsoft 365 / Graph API
+export const microsoft365API = {
+  status:       () => getApiClient().get<ApiResponse<{ configured: boolean; connected?: boolean; tenant_id?: string }>>('/api/microsoft365/status'),
+  azureDevices: (top?: number) => getApiClient().get<ApiResponse<Record<string, unknown>[]>>('/api/microsoft365/azure-devices', { params: { top } }),
+  intune:       (top?: number) => getApiClient().get<ApiResponse<Record<string, unknown>[]>>('/api/microsoft365/intune-devices', { params: { top } }),
+  autopilot:    () => getApiClient().get<ApiResponse<Record<string, unknown>[]>>('/api/microsoft365/autopilot'),
+  users:        (top?: number) => getApiClient().get<ApiResponse<Record<string, unknown>[]>>('/api/microsoft365/users', { params: { top } }),
+  subscriptions: () => getApiClient().get<ApiResponse<Record<string, unknown>[]>>('/api/microsoft365/subscriptions'),
+};

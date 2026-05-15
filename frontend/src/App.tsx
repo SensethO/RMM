@@ -12,6 +12,8 @@ import DeviceDetail from './pages/DeviceDetail';
 import Versions from './pages/Versions';
 import Monitor from './pages/Monitor';
 import Deploy from './pages/Deploy';
+import Organization from './pages/Organization';
+import Microsoft365 from './pages/Microsoft365';
 
 function App() {
   const { isReady } = useApiClient();
@@ -74,6 +76,8 @@ function App() {
           <Route path="/versions" element={<Versions />} />
           <Route path="/monitor" element={<Monitor />} />
           <Route path="/deploy" element={<Deploy />} />
+          <Route path="/organization" element={<Organization />} />
+          <Route path="/microsoft365" element={<Microsoft365 />} />
           <Route path="*" element={<Navigate to="/" />} />
         </Routes>
       </Layout>

@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useApiClient } from '../hooks/useApi';
-import { deviceAPI, commandAPI } from '../api/client';
+import { deviceAPI, commandAPI, orgAPI } from '../api/client';
 import { useSystemInfo, isAgentOutdated } from '../hooks/useSystemInfo';
 
 interface Device {
@@ -16,6 +16,10 @@ interface Device {
   last_seen?: string;
   created_at: string;
   agent_version?: string;
+  organization_id?: string | null;
+  site_id?: string | null;
+  department_id?: string | null;
+  notes?: string | null;
 }
 
 interface Telemetry {
@@ -282,6 +286,12 @@ export default function DeviceDetail() {
       {/* Security - ADWCleaner */}
       <SecuritySection deviceId={id!} />
 
+      {/* Org Assignment */}
+      <OrgSection device={device} onUpdate={d => setDevice(d)} />
+
+      {/* Deploy apps to this device */}
+      <DeploySection deviceId={id!} />
+
       {/* Installed Apps */}
       <InstalledAppsSection deviceId={id!} />
 
@@ -328,6 +338,256 @@ function InfoRow({ label, value }: { label: string; value: React.ReactNode }) {
     <div className="flex justify-between items-start text-sm">
       <span className="text-gray-500 w-28 shrink-0">{label}</span>
       <span className="text-gray-900 text-right">{value}</span>
+    </div>
+  );
+}
+
+// ─── Organisation assignment section ─────────────────────────────────────────
+interface OrgItem { id: string; name: string; }
+
+function OrgSection({ device, onUpdate }: { device: Device; onUpdate: (d: Device) => void }) {
+  const [orgs,  setOrgs]  = useState<OrgItem[]>([]);
+  const [sites, setSites] = useState<(OrgItem & { organization_id: string | null })[]>([]);
+  const [depts, setDepts] = useState<(OrgItem & { organization_id: string | null; site_id: string | null })[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [open,   setOpen]   = useState(false);
+  const [orgId,  setOrgId]  = useState(device.organization_id || '');
+  const [siteId, setSiteId] = useState(device.site_id || '');
+  const [deptId, setDeptId] = useState(device.department_id || '');
+  const [notes,  setNotes]  = useState(device.notes || '');
+  const [saving, setSaving] = useState(false);
+  const [msg,    setMsg]    = useState<string | null>(null);
+
+  const loadOrg = useCallback(async () => {
+    if (loaded) return;
+    try {
+      const [or, sr, dr] = await Promise.all([orgAPI.listOrgs(), orgAPI.listSites(), orgAPI.listDepts()]);
+      setOrgs((or.data.data || []) as OrgItem[]);
+      setSites((sr.data.data || []) as (OrgItem & { organization_id: string | null })[]);
+      setDepts((dr.data.data || []) as (OrgItem & { organization_id: string | null; site_id: string | null })[]);
+      setLoaded(true);
+    } catch {}
+  }, [loaded]);
+
+  useEffect(() => {
+    if (open) loadOrg();
+  }, [open, loadOrg]);
+
+  // Sync when device changes
+  useEffect(() => {
+    setOrgId(device.organization_id || '');
+    setSiteId(device.site_id || '');
+    setDeptId(device.department_id || '');
+    setNotes(device.notes || '');
+  }, [device.organization_id, device.site_id, device.department_id, device.notes]);
+
+  const orgName  = orgs.find(o => o.id === (device.organization_id || ''))?.name;
+  const siteName = sites.find(s => s.id === (device.site_id || ''))?.name;
+  const deptName = depts.find(d => d.id === (device.department_id || ''))?.name;
+
+  async function save() {
+    setSaving(true); setMsg(null);
+    try {
+      const r = await orgAPI.assignDevice(device.id, {
+        organization_id: orgId || null,
+        site_id: siteId || null,
+        department_id: deptId || null,
+        notes: notes || undefined,
+      });
+      onUpdate(r.data.data as unknown as Device);
+      setMsg('✅ Assignation enregistrée');
+      setOpen(false);
+    } catch { setMsg('❌ Erreur'); }
+    setSaving(false);
+  }
+
+  return (
+    <div className="bg-white rounded-lg shadow p-6">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-lg font-semibold text-gray-800">🏢 Organisation</h2>
+        <button onClick={() => setOpen(o => !o)} className="text-sm text-blue-600 hover:underline">
+          {open ? '▲ Fermer' : '✏️ Modifier'}
+        </button>
+      </div>
+
+      {!open ? (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
+          <div><p className="text-gray-400 text-xs mb-0.5">Entreprise</p><p className="font-medium text-gray-800">{orgName || <span className="text-gray-300">—</span>}</p></div>
+          <div><p className="text-gray-400 text-xs mb-0.5">Site</p><p className="font-medium text-gray-800">{siteName || <span className="text-gray-300">—</span>}</p></div>
+          <div><p className="text-gray-400 text-xs mb-0.5">Service</p><p className="font-medium text-gray-800">{deptName || <span className="text-gray-300">—</span>}</p></div>
+          <div><p className="text-gray-400 text-xs mb-0.5">Notes</p><p className="font-medium text-gray-800 truncate">{device.notes || <span className="text-gray-300">—</span>}</p></div>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Entreprise</label>
+            <select value={orgId} onChange={e => { setOrgId(e.target.value); setSiteId(''); setDeptId(''); }}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+              <option value="">— Aucune —</option>
+              {orgs.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Site</label>
+            <select value={siteId} onChange={e => { setSiteId(e.target.value); setDeptId(''); }}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+              <option value="">— Aucun —</option>
+              {sites.filter(s => !orgId || s.organization_id === orgId).map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Service</label>
+            <select value={deptId} onChange={e => setDeptId(e.target.value)}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+              <option value="">— Aucun —</option>
+              {depts.filter(d => (!siteId || d.site_id === siteId) && (!orgId || d.organization_id === orgId)).map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Notes</label>
+            <input value={notes} onChange={e => setNotes(e.target.value)} placeholder="Notes internes..."
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+          </div>
+          <div className="sm:col-span-2 flex items-center gap-3">
+            <button onClick={save} disabled={saving}
+              className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg transition disabled:opacity-50">
+              {saving ? '...' : '💾 Enregistrer'}
+            </button>
+            <button onClick={() => setOpen(false)} className="px-4 py-2 bg-gray-100 text-gray-600 text-sm rounded-lg hover:bg-gray-200">Annuler</button>
+            {msg && <span className="text-sm">{msg}</span>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── App catalog for in-device deployment ─────────────────────────────────────
+const DEPLOY_CATALOG = [
+  { id:'chrome',    name:'Google Chrome',     icon:'🌐', package_id:'Google.Chrome',                     category:'Navigateurs'  },
+  { id:'firefox',   name:'Mozilla Firefox',   icon:'🦊', package_id:'Mozilla.Firefox',                   category:'Navigateurs'  },
+  { id:'edge',      name:'Microsoft Edge',    icon:'🔵', package_id:'Microsoft.Edge',                    category:'Navigateurs'  },
+  { id:'teams',     name:'Microsoft Teams',   icon:'💬', package_id:'Microsoft.Teams',                   category:'Bureautique'  },
+  { id:'zoom',      name:'Zoom',              icon:'📹', package_id:'Zoom.Zoom',                         category:'Bureautique'  },
+  { id:'libreoffice',name:'LibreOffice',      icon:'📄', package_id:'TheDocumentFoundation.LibreOffice', category:'Bureautique'  },
+  { id:'reader',    name:'Adobe Reader',      icon:'📕', package_id:'Adobe.Acrobat.Reader.64-bit',       category:'Bureautique'  },
+  { id:'slack',     name:'Slack',             icon:'💼', package_id:'SlackTechnologies.Slack',           category:'Bureautique'  },
+  { id:'adwcleaner',name:'ADWCleaner',        icon:'🧹', package_id:'Malwarebytes.AdwCleaner',           category:'Sécurité'     },
+  { id:'malwarebytes',name:'Malwarebytes',    icon:'🛡️', package_id:'Malwarebytes.Malwarebytes',         category:'Sécurité'     },
+  { id:'bitwarden', name:'Bitwarden',         icon:'🔑', package_id:'Bitwarden.Bitwarden',               category:'Sécurité'     },
+  { id:'vscode',    name:'VS Code',           icon:'🔷', package_id:'Microsoft.VisualStudioCode',        category:'Dev'          },
+  { id:'git',       name:'Git',               icon:'🌿', package_id:'Git.Git',                           category:'Dev'          },
+  { id:'nodejs',    name:'Node.js LTS',       icon:'💚', package_id:'OpenJS.NodeJS.LTS',                 category:'Dev'          },
+  { id:'chatgpt',   name:'ChatGPT',           icon:'🤖', package_id:'9NTM2QC6QWS7',                     category:'IA'           },
+  { id:'claude',    name:'Claude',            icon:'🧠', package_id:'Anthropic.Claude',                  category:'IA'           },
+  { id:'copilot',   name:'Copilot',           icon:'🪟', package_id:'9NHT9RB2F4HD',                     category:'IA'           },
+  { id:'perplexity',name:'Perplexity',        icon:'🔍', package_id:'Perplexity.Perplexity',            category:'IA'           },
+  { id:'ollama',    name:'Ollama',            icon:'🦙', package_id:'Ollama.Ollama',                    category:'IA'           },
+  { id:'7zip',      name:'7-Zip',             icon:'📦', package_id:'7zip.7zip',                         category:'Utilitaires'  },
+  { id:'vlc',       name:'VLC',               icon:'🎬', package_id:'VideoLAN.VLC',                      category:'Utilitaires'  },
+  { id:'notepadpp', name:'Notepad++',         icon:'📝', package_id:'Notepad++.Notepad++',               category:'Utilitaires'  },
+];
+const DEPLOY_CATS = ['Tous', ...Array.from(new Set(DEPLOY_CATALOG.map(a => a.category)))];
+
+function DeploySection({ deviceId }: { deviceId: string }) {
+  const [cat,     setCat]     = useState('Tous');
+  const [search,  setSearch]  = useState('');
+  const [pending, setPending] = useState<Record<string, string>>({});  // appId → status
+  const [msgs,    setMsgs]    = useState<Record<string, string>>({});
+
+  const filtered = DEPLOY_CATALOG.filter(a =>
+    (cat === 'Tous' || a.category === cat) &&
+    (!search || a.name.toLowerCase().includes(search.toLowerCase()) || a.package_id.toLowerCase().includes(search.toLowerCase()))
+  );
+
+  async function install(app: typeof DEPLOY_CATALOG[0]) {
+    setPending(p => ({ ...p, [app.id]: 'sending' }));
+    setMsgs(p => ({ ...p, [app.id]: '' }));
+    try {
+      await commandAPI.queue(deviceId, {
+        command_type: 'install_app',
+        params: { method: 'winget', package_id: app.package_id, display_name: app.name },
+      });
+      setPending(p => ({ ...p, [app.id]: 'sent' }));
+      setMsgs(p => ({ ...p, [app.id]: '✅ Commande envoyée' }));
+      setTimeout(() => setPending(p => { const n = { ...p }; delete n[app.id]; return n; }), 4000);
+    } catch {
+      setPending(p => ({ ...p, [app.id]: 'error' }));
+      setMsgs(p => ({ ...p, [app.id]: '❌ Erreur' }));
+    }
+  }
+
+  async function uninstall(app: typeof DEPLOY_CATALOG[0]) {
+    setPending(p => ({ ...p, [app.id + '_u']: 'sending' }));
+    try {
+      await commandAPI.queue(deviceId, {
+        command_type: 'uninstall_app',
+        params: { method: 'winget', package_id: app.package_id, display_name: app.name },
+      });
+      setPending(p => ({ ...p, [app.id + '_u']: 'sent' }));
+      setMsgs(p => ({ ...p, [app.id]: '✅ Désinstallation envoyée' }));
+      setTimeout(() => setPending(p => { const n = { ...p }; delete n[app.id + '_u']; return n; }), 4000);
+    } catch {
+      setPending(p => ({ ...p, [app.id + '_u']: 'error' }));
+    }
+  }
+
+  return (
+    <div className="bg-white rounded-lg shadow p-6">
+      <h2 className="text-lg font-semibold text-gray-800 mb-4">🚀 Déployer une application</h2>
+
+      {/* Filters */}
+      <div className="flex flex-wrap gap-2 mb-4">
+        <input
+          value={search} onChange={e => setSearch(e.target.value)}
+          placeholder="Rechercher une app..."
+          className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 w-48"
+        />
+        {DEPLOY_CATS.map(c => (
+          <button key={c} onClick={() => setCat(c)}
+            className={`px-3 py-1.5 text-xs rounded-lg font-medium transition ${cat === c ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+            {c}
+          </button>
+        ))}
+      </div>
+
+      {/* App grid */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
+        {filtered.map(app => {
+          const st  = pending[app.id];
+          const stU = pending[app.id + '_u'];
+          const msg = msgs[app.id];
+          return (
+            <div key={app.id} className="border border-gray-200 rounded-lg p-3 flex flex-col gap-2 hover:border-blue-300 hover:shadow-sm transition">
+              <div className="flex items-center gap-2">
+                <span className="text-xl">{app.icon}</span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-semibold text-gray-800 truncate">{app.name}</p>
+                  <p className="text-xs text-gray-400 truncate">{app.category}</p>
+                </div>
+              </div>
+              {msg && <p className="text-xs text-green-600">{msg}</p>}
+              <div className="flex gap-1 mt-auto">
+                <button
+                  onClick={() => install(app)}
+                  disabled={!!st || !!stU}
+                  className="flex-1 py-1 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded transition disabled:opacity-50"
+                >
+                  {st === 'sending' ? '...' : st === 'sent' ? '✓' : '⬇ Installer'}
+                </button>
+                <button
+                  onClick={() => uninstall(app)}
+                  disabled={!!st || !!stU}
+                  title="Désinstaller"
+                  className="px-2 py-1 bg-gray-100 hover:bg-red-50 hover:text-red-600 text-gray-500 text-xs rounded transition disabled:opacity-50"
+                >
+                  {stU === 'sending' ? '...' : '✕'}
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
