@@ -974,22 +974,37 @@ async function executeCommand(type, params) {
       // ── PURGE ────────────────────────────────────────────────────────────
       if (type === 'adwcleaner_purge') {
         console.log('   🗑  Purge de la quarantaine ADWCleaner...');
+        const purgeLines = [];
+        purgeLines.push('AdwCleaner - Purge Quarantaine');
+        purgeLines.push('================================');
+        purgeLines.push(`Exécution : ${new Date().toLocaleString('fr-FR')}`);
+        purgeLines.push('');
+        purgeLines.push(`Exécutable : ${adwExe}`);
+        purgeLines.push('');
+        purgeLines.push('> Vidage de la quarantaine en cours...');
+        const psPurge = `Start-Process -FilePath "${adwExe}" -ArgumentList "/eula","/quarantine","purge" -WindowStyle Hidden -Wait`;
+        const encPurge = Buffer.from(psPurge, 'utf16le').toString('base64');
         try {
-          execSync(`"${adwExe}" /eula /quarantine purge`, { timeout: 60_000, shell: 'cmd.exe' });
-        } catch {}
+          execSync(`powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ${encPurge}`, { timeout: 60_000 });
+          purgeLines.push('> Commande ADWCleaner exécutée avec succès.');
+        } catch (e) {
+          purgeLines.push(`> Note : ${e.message}`);
+        }
         // Fallback : supprimer manuellement le dossier quarantaine
         const qDir = 'C:\\AdwCleaner\\Quarantine';
-        let purgedFiles = 0;
         if (fs.existsSync(qDir)) {
           try {
             execSync(`rd /s /q "${qDir}" 2>nul`, { timeout: 10_000, shell: 'cmd.exe' });
-            purgedFiles = 1; // approximatif
+            purgeLines.push('> Dossier quarantaine supprimé manuellement.');
           } catch {}
         }
+        purgeLines.push('');
+        purgeLines.push('✅ Quarantaine vidée définitivement.');
         return JSON.stringify({
-          action:  'purge',
-          date:    new Date().toISOString(),
-          message: '✅ Quarantaine vidée définitivement.',
+          action:         'purge',
+          date:           new Date().toISOString(),
+          message:        '✅ Quarantaine vidée définitivement.',
+          console_output: purgeLines.join('\n'),
         });
       }
 
@@ -1033,30 +1048,64 @@ async function executeCommand(type, params) {
       // ── CLEAN (quarantaine) ───────────────────────────────────────────────
       if (type === 'adwcleaner_clean') {
         console.log('   🔒 Mise en quarantaine des menaces...');
+        const cleanLines = [];
+        cleanLines.push('AdwCleaner - Mise en Quarantaine');
+        cleanLines.push('=================================');
+        cleanLines.push(`Exécution : ${new Date().toLocaleString('fr-FR')}`);
+        cleanLines.push('');
+        cleanLines.push(`Exécutable : ${adwExe}`);
+        cleanLines.push('');
+        cleanLines.push('> Mise en quarantaine des menaces détectées...');
+        const psClean = `Start-Process -FilePath "${adwExe}" -ArgumentList "/eula","/clean","/noreboot" -WindowStyle Hidden -Wait`;
+        const encClean = Buffer.from(psClean, 'utf16le').toString('base64');
         try {
-          execSync(`"${adwExe}" /eula /clean /noreboot`, { timeout: 180_000, shell: 'cmd.exe' });
-        } catch {}
+          execSync(`powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ${encClean}`, { timeout: 180_000 });
+          cleanLines.push('> Commande ADWCleaner exécutée.');
+        } catch (e) {
+          cleanLines.push(`> Note : ${e.message}`);
+        }
         const cleanLog = findLatestLog('C');
         let quarantined = 0;
         if (cleanLog) {
           const content = readLog(cleanLog);
           quarantined = parseAdwLog(content).length;
+          cleanLines.push('');
+          cleanLines.push(`> Log : ${cleanLog}`);
+          cleanLines.push(`> Éléments mis en quarantaine : ${quarantined}`);
+        } else {
+          cleanLines.push('> Log de nettoyage non trouvé.');
         }
+        cleanLines.push('');
+        cleanLines.push(`✅ ${quarantined} élément(s) mis en quarantaine.`);
         console.log(`   ✅ Quarantaine : ${quarantined} élément(s)`);
         return JSON.stringify({
-          action:      'clean',
-          date:        new Date().toISOString(),
+          action:         'clean',
+          date:           new Date().toISOString(),
           quarantined,
-          message:     `✅ ${quarantined} élément(s) mis en quarantaine.`,
-          log_path:    cleanLog || null,
+          message:        `✅ ${quarantined} élément(s) mis en quarantaine.`,
+          log_path:       cleanLog || null,
+          console_output: cleanLines.join('\n'),
         });
       }
 
       // ── SCAN ─────────────────────────────────────────────────────────────
       console.log('   🔍 Lancement du scan ADWCleaner (1-2 min)...');
+      const scanLines = [];
+      scanLines.push('AdwCleaner - Rapport de Scan');
+      scanLines.push('=============================');
+      scanLines.push(`Démarrage : ${new Date().toLocaleString('fr-FR')}`);
+      scanLines.push('');
+      scanLines.push(`Exécutable : ${adwExe}`);
+      scanLines.push('');
+      scanLines.push('> Scan en cours (1-2 minutes)...');
+      const psScan = `Start-Process -FilePath "${adwExe}" -ArgumentList "/eula","/scan","/noreboot" -WindowStyle Hidden -Wait`;
+      const encScan = Buffer.from(psScan, 'utf16le').toString('base64');
       try {
-        execSync(`"${adwExe}" /eula /scan /noreboot`, { timeout: 180_000, shell: 'cmd.exe' });
-      } catch {}  // exit code non-0 même si scan OK
+        execSync(`powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ${encScan}`, { timeout: 180_000 });
+        scanLines.push('> Scan terminé.');
+      } catch (e) {
+        scanLines.push(`> Note : ${e.message}`);
+      }
 
       // Chercher le log de scan [S##]
       let scanLog = findLatestLog('S');
@@ -1072,14 +1121,31 @@ async function executeCommand(type, params) {
       const verMatch  = content.match(/AdwCleaner\s+([\d.]+)/);
       const dbMatch   = content.match(/Database:\s+(\S+)/);
 
+      scanLines.push('');
+      scanLines.push(`> Log : ${scanLog}`);
+      scanLines.push(`> Version ADWCleaner : ${verMatch?.[1] || 'inconnue'}`);
+      scanLines.push(`> Base de données : ${dbMatch?.[1] || 'inconnue'}`);
+      scanLines.push('');
+      if (threats.length === 0) {
+        scanLines.push('✅ Aucune menace détectée. Système sain.');
+      } else {
+        scanLines.push(`⚠️  ${threats.length} menace(s) détectée(s) :`);
+        for (const t of threats) {
+          scanLines.push(`   [${t.category}] ${t.type}  →  ${t.path}`);
+        }
+      }
+      scanLines.push('');
+      scanLines.push(`Fin du scan : ${new Date().toLocaleString('fr-FR')}`);
+
       const result = {
-        scan_date:     new Date().toISOString(),
-        version:       verMatch?.[1] || 'unknown',
-        database:      dbMatch?.[1]  || '',
-        threats_count: threats.length,
-        clean:         threats.length === 0,
+        scan_date:      new Date().toISOString(),
+        version:        verMatch?.[1] || 'unknown',
+        database:       dbMatch?.[1]  || '',
+        threats_count:  threats.length,
+        clean:          threats.length === 0,
         threats,
-        log_path:      scanLog,
+        log_path:       scanLog,
+        console_output: scanLines.join('\n'),
       };
       console.log(`   ✅ Scan terminé : ${threats.length} menace(s) trouvée(s)`);
       return JSON.stringify(result);

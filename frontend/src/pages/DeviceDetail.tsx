@@ -610,21 +610,32 @@ interface AdwScanResult {
   clean: boolean;
   threats: AdwThreat[];
   log_path?: string;
+  console_output?: string;
 }
 interface AdwCleanResult {
   action: string;
   date: string;
   quarantined: number;
   message: string;
+  console_output?: string;
+}
+interface AdwPurgeResult {
+  action: string;
+  date: string;
+  message: string;
+  console_output?: string;
 }
 
 function SecuritySection({ deviceId }: { deviceId: string }) {
-  const [scanResult, setScanResult]     = useState<AdwScanResult | null>(null);
-  const [loading, setLoading]           = useState(false);
-  const [actionLoading, setActionLoading] = useState<string | null>(null);
-  const [error, setError]               = useState<string | null>(null);
-  const [message, setMessage]           = useState<string | null>(null);
-  const [confirmed, setConfirmed]       = useState(false);
+  const [scanResult, setScanResult]         = useState<AdwScanResult | null>(null);
+  const [loading, setLoading]               = useState(false);
+  const [actionLoading, setActionLoading]   = useState<string | null>(null);
+  const [error, setError]                   = useState<string | null>(null);
+  const [message, setMessage]               = useState<string | null>(null);
+  const [confirmed, setConfirmed]           = useState(false);
+  const [terminalOutput, setTerminalOutput] = useState<string | null>(null);
+  const [showTerminal, setShowTerminal]     = useState(false);
+  const terminalRef = useRef<HTMLPreElement | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -632,13 +643,24 @@ function SecuritySection({ deviceId }: { deviceId: string }) {
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [deviceId]);
 
+  // Auto-scroll terminal to bottom when output changes
+  useEffect(() => {
+    if (terminalRef.current && showTerminal) {
+      terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
+    }
+  }, [terminalOutput, showTerminal]);
+
   async function loadLastScan() {
     try {
       const hist = await commandAPI.getHistory(deviceId, 50);
       const cmds = (hist.data.data as Record<string, unknown>[]) || [];
       const recent = cmds.find(c => c.command_type === 'adwcleaner_scan' && c.status === 'success');
       if (recent?.output) {
-        try { setScanResult(JSON.parse(recent.output as string) as AdwScanResult); } catch {}
+        try {
+          const parsed = JSON.parse(recent.output as string) as AdwScanResult;
+          setScanResult(parsed);
+          if (parsed.console_output) { setTerminalOutput(parsed.console_output); setShowTerminal(false); }
+        } catch {}
       }
     } catch {}
   }
@@ -671,21 +693,33 @@ function SecuritySection({ deviceId }: { deviceId: string }) {
 
   async function runScan() {
     setLoading(true); setError(null); setMessage(null);
+    setTerminalOutput('> Connexion à l\'agent...\n> Lancement du scan ADWCleaner (1-2 min)...');
+    setShowTerminal(true);
     try {
       const res = await commandAPI.queue(deviceId, { command_type: 'adwcleaner_scan' });
       const cmdId = (res.data.data as Record<string, unknown>).id as string;
       pollCmd(cmdId,
         (out) => {
-          try { setScanResult(JSON.parse(out) as AdwScanResult); } catch {}
+          try {
+            const parsed = JSON.parse(out) as AdwScanResult;
+            setScanResult(parsed);
+            if (parsed.console_output) setTerminalOutput(parsed.console_output);
+          } catch {}
           setLoading(false);
         },
-        (err) => { setError(err); setLoading(false); }
+        (err) => { setError(err); setLoading(false); setTerminalOutput(prev => (prev || '') + '\n\n❌ Erreur : ' + err); }
       );
-    } catch (e) { setError(e instanceof Error ? e.message : 'Erreur'); setLoading(false); }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Erreur');
+      setLoading(false);
+      setTerminalOutput(prev => (prev || '') + '\n\n❌ ' + (e instanceof Error ? e.message : 'Erreur'));
+    }
   }
 
   async function runClean() {
     setActionLoading('clean'); setError(null); setMessage(null);
+    setTerminalOutput('> Mise en quarantaine des menaces...');
+    setShowTerminal(true);
     try {
       const res = await commandAPI.queue(deviceId, { command_type: 'adwcleaner_clean' });
       const cmdId = (res.data.data as Record<string, unknown>).id as string;
@@ -694,23 +728,33 @@ function SecuritySection({ deviceId }: { deviceId: string }) {
           try {
             const r = JSON.parse(out) as AdwCleanResult;
             setMessage(r.message || `✅ ${r.quarantined} élément(s) mis en quarantaine.`);
+            if (r.console_output) setTerminalOutput(r.console_output);
           } catch { setMessage('✅ Quarantaine effectuée.'); }
           setActionLoading(null);
           loadLastScan();
         },
-        (err) => { setError(err); setActionLoading(null); }
+        (err) => { setError(err); setActionLoading(null); setTerminalOutput(prev => (prev || '') + '\n\n❌ ' + err); }
       );
     } catch (e) { setError(e instanceof Error ? e.message : 'Erreur'); setActionLoading(null); }
   }
 
   async function runPurge() {
     setActionLoading('purge'); setError(null); setMessage(null); setConfirmed(false);
+    setTerminalOutput('> Purge de la quarantaine en cours...');
+    setShowTerminal(true);
     try {
       const res = await commandAPI.queue(deviceId, { command_type: 'adwcleaner_purge' });
       const cmdId = (res.data.data as Record<string, unknown>).id as string;
       pollCmd(cmdId,
-        () => { setMessage('✅ Quarantaine vidée définitivement.'); setActionLoading(null); },
-        (err) => { setError(err); setActionLoading(null); }
+        (out) => {
+          try {
+            const r = JSON.parse(out) as AdwPurgeResult;
+            setMessage(r.message || '✅ Quarantaine vidée définitivement.');
+            if (r.console_output) setTerminalOutput(r.console_output);
+          } catch { setMessage('✅ Quarantaine vidée définitivement.'); }
+          setActionLoading(null);
+        },
+        (err) => { setError(err); setActionLoading(null); setTerminalOutput(prev => (prev || '') + '\n\n❌ ' + err); }
       );
     } catch (e) { setError(e instanceof Error ? e.message : 'Erreur'); setActionLoading(null); }
   }
@@ -759,6 +803,47 @@ function SecuritySection({ deviceId }: { deviceId: string }) {
 
       {error   && <p className="text-red-500   text-sm mb-3">{error}</p>}
       {message && <p className="text-green-600 text-sm mb-3 font-medium">{message}</p>}
+
+      {/* Terminal output panel */}
+      {terminalOutput && (
+        <div className="mb-4 rounded-lg overflow-hidden border border-gray-700 shadow-inner">
+          {/* Terminal title bar */}
+          <div className="flex items-center justify-between bg-gray-800 px-3 py-1.5">
+            <div className="flex items-center gap-2">
+              <span className="w-3 h-3 rounded-full bg-red-500 inline-block" />
+              <span className="w-3 h-3 rounded-full bg-yellow-400 inline-block" />
+              <span className="w-3 h-3 rounded-full bg-green-500 inline-block" />
+              <span className="ml-2 text-gray-400 text-xs font-mono">ADWCleaner — sortie commande</span>
+            </div>
+            <div className="flex items-center gap-2">
+              {(loading || actionLoading) && (
+                <span className="flex items-center gap-1 text-yellow-400 text-xs font-mono">
+                  <span className="animate-pulse">●</span> En cours...
+                </span>
+              )}
+              <button
+                onClick={() => setShowTerminal(v => !v)}
+                className="text-gray-400 hover:text-white text-xs px-2 py-0.5 rounded hover:bg-gray-700 transition"
+              >
+                {showTerminal ? '▼ Réduire' : '▶ Afficher'}
+              </button>
+            </div>
+          </div>
+          {/* Terminal body */}
+          {showTerminal && (
+            <pre
+              ref={terminalRef}
+              className="bg-gray-900 text-green-400 text-xs font-mono p-4 overflow-auto leading-relaxed whitespace-pre-wrap"
+              style={{ maxHeight: '320px' }}
+            >
+              {terminalOutput}
+              {(loading || actionLoading) && (
+                <span className="inline-block animate-pulse text-yellow-400">▌</span>
+              )}
+            </pre>
+          )}
+        </div>
+      )}
 
       {/* Scan results */}
       {scanResult && (
