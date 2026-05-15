@@ -17,6 +17,7 @@ import Organization from './pages/Organization';
 import Microsoft365 from './pages/Microsoft365';
 import Profile from './pages/Profile';
 import AdminLogs from './pages/AdminLogs';
+import Tenants from './pages/Tenants';
 
 function App() {
   const { isReady } = useApiClient();
@@ -79,6 +80,7 @@ function App() {
           <Route path="/microsoft365"  element={<Microsoft365 />} />
           <Route path="/profile"       element={<Profile />} />
           <Route path="/admin/logs"    element={<AdminLogs />} />
+          <Route path="/tenants"       element={<Tenants />} />
           <Route path="*"              element={<Navigate to="/" />} />
         </Routes>
       </Layout>

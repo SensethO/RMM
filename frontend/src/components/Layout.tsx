@@ -30,8 +30,9 @@ export default function Layout({ children }: LayoutProps) {
     { href: '/alerts',        label: 'Alertes',        icon: '🚨', group: 'sys'  },
     { href: '/versions',      label: 'Versions',       icon: '🔖', group: 'sys'  },
     { href: '/settings',      label: 'Paramètres',     icon: '⚙️', group: 'sys'  },
-    { href: '/profile',       label: 'Mon profil',     icon: '👤', group: 'admin' },
-    { href: '/admin/logs',    label: 'Logs connexion', icon: '📋', group: 'admin' },
+    { href: '/tenants',       label: 'Tenants clients', icon: '🏢', group: 'admin' },
+    { href: '/profile',       label: 'Mon profil',      icon: '👤', group: 'admin' },
+    { href: '/admin/logs',    label: 'Logs connexion',  icon: '📋', group: 'admin' },
   ];
 
   const isActive = (href: string) =>
@@ -48,6 +49,7 @@ export default function Layout({ children }: LayoutProps) {
     '/alerts':       'Alertes',
     '/versions':     'Versions',
     '/settings':     'Paramètres',
+    '/tenants':      'Tenants clients',
     '/profile':      'Mon profil',
     '/admin/logs':   'Logs de connexion',
   };

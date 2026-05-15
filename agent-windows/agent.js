@@ -42,9 +42,10 @@ const RMM_PID_FILE = _path.join(RMM_DATA_DIR, 'agent.pid');
 
 // ─── Configuration ────────────────────────────────────────────────────────────
 const CONFIG = {
-  backend:  'https://backend-xi-one-36.vercel.app',
-  username: 'admin',
-  password: 'demo123',
+  backend:   'https://backend-xi-one-36.vercel.app',
+  username:  'admin',
+  password:  'demo123',
+  tenant_id: '', // Laisser vide → tenant démo | Renseigner l'UUID Supabase du tenant client
 };
 
 // Paramètres actifs (mis à jour depuis le backend)
@@ -244,15 +245,14 @@ function restartTimers() {
 // ─── Step 1: Login ────────────────────────────────────────────────────────────
 async function login() {
   console.log('🔐 Connexion au backend...');
-  const res = await request('POST', '/api/auth/login', {
-    username: CONFIG.username,
-    password: CONFIG.password,
-  });
+  const loginBody = { username: CONFIG.username, password: CONFIG.password };
+  if (CONFIG.tenant_id) loginBody.tenant_id = CONFIG.tenant_id;
+  const res = await request('POST', '/api/auth/login', loginBody);
   if (res.status !== 200 || !res.data.token) {
     throw new Error(`Login échoué (${res.status}): ${JSON.stringify(res.data)}`);
   }
   authToken = res.data.token;
-  console.log('✅ Connecté !');
+  console.log('✅ Connecté !' + (CONFIG.tenant_id ? ` (tenant: ${CONFIG.tenant_id.substring(0, 8)}…)` : ' (démo)'));
 }
 
 // ─── Step 2: Register device ──────────────────────────────────────────────────

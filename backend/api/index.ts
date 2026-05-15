@@ -59,18 +59,20 @@ app.get('/api/health', (_req, res) => {
 
 // ─── Auth route (no middleware) ───────────────────────────────────────────────
 app.post('/api/auth/login', (req: Request, res: Response) => {
-  const { username, password } = req.body as { username?: string; password?: string };
+  const { username, password, tenant_id } = req.body as { username?: string; password?: string; tenant_id?: string };
   if (!username || !password) {
     res.status(400).json({ error: 'Username and password required' });
     return;
   }
   if (username === 'admin' && password === 'demo123') {
     const secret = process.env.JWT_SECRET || 'rmm-prod-jwt-secret-2024';
-    const token = jwt.sign(
-      { sub: 'demo-user-001', email: 'admin@rmm-demo.local', name: 'Admin User', iss: 'rmm-demo' },
-      secret,
-      { algorithm: 'HS256', expiresIn: '24h' }
-    );
+    const payload: Record<string, unknown> = {
+      sub: 'demo-user-001', email: 'admin@rmm-demo.local', name: 'Admin User', iss: 'rmm-demo',
+    };
+    // If a tenant_id is provided (e.g., from a per-company agent), embed it so
+    // tenantMiddleware can look up the correct tenant via tenants.id
+    if (tenant_id) payload.tenant_id = tenant_id;
+    const token = jwt.sign(payload, secret, { algorithm: 'HS256', expiresIn: '24h' });
     res.json({ token, user: { id: 'demo-user-001', name: 'Admin User', email: 'admin@rmm-demo.local', role: 'admin' } });
     return;
   }
@@ -101,9 +103,12 @@ function authMiddleware(req: Request, res: Response, next: NextFunction): void {
       res.status(401).json({ error: 'Invalid token', statusCode: 401 });
       return;
     }
-    const tenantId = (decoded.tid || decoded.tenant_id || 'demo-tenant') as string;
     const userId  = (decoded.oid || decoded.sub || 'unknown-user') as string;
-    (req as unknown as Record<string, unknown>)._tenantId = tenantId;
+    // Distinguish Azure AD tokens (claim: 'tid') from custom JWTs (claim: 'tenant_id')
+    const azureTid       = decoded.tid        as string | undefined;  // Azure AD tenant GUID
+    const customTenantId = decoded.tenant_id  as string | undefined;  // custom JWT claim
+    (req as unknown as Record<string, unknown>)._azureTid       = azureTid;
+    (req as unknown as Record<string, unknown>)._customTenantId = customTenantId;
     (req as unknown as Record<string, unknown>)._userId   = userId;
     (req as unknown as Record<string, unknown>)._token    = token;
     next();
@@ -114,34 +119,50 @@ function authMiddleware(req: Request, res: Response, next: NextFunction): void {
 }
 
 // ─── Tenant middleware ────────────────────────────────────────────────────────
+const DEMO_TENANT_ID = 'a0000000-dead-beef-0000-000000000001';
+
 async function tenantMiddleware(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const tenantId = (req as unknown as Record<string, unknown>)._tenantId as string;
-    if (!tenantId) {
-      res.status(401).json({ error: 'Missing tenant context', statusCode: 401 });
-      return;
-    }
+    const r = req as unknown as Record<string, unknown>;
+    const azureTid       = r._azureTid       as string | undefined;
+    const customTenantId = r._customTenantId as string | undefined;
 
     const supabase = getSupabase();
-    const { data: tenant, error } = await supabase
-      .from('tenants')
-      .select('*')
-      .eq('id', tenantId)
-      .single();
 
-    if (error || !tenant) {
-      // For demo JWT tokens (no tid/tenant_id claim), use the seeded demo tenant
-      const DEMO_TENANT_ID = 'a0000000-dead-beef-0000-000000000001';
-      if (tenantId === 'demo-tenant') {
-        req.tenant = { id: DEMO_TENANT_ID, office365_tenant_id: undefined, name: 'Demo Tenant', subscription_tier: 'demo' };
-        next();
-        return;
+    if (azureTid) {
+      // Azure AD token → look up by office365_tenant_id
+      const { data: tenant } = await supabase
+        .from('tenants')
+        .select('*')
+        .eq('office365_tenant_id', azureTid)
+        .single();
+      if (tenant) {
+        req.tenant = { id: tenant.id, office365_tenant_id: tenant.office365_tenant_id, name: tenant.name, subscription_tier: tenant.subscription_tier };
+        next(); return;
       }
-      res.status(401).json({ error: 'Invalid tenant', statusCode: 401 });
+      // Azure tenant not registered yet — allow access with azureTid as the effective id
+      // so the MSP can still log in and register their tenant
+      req.tenant = { id: azureTid, office365_tenant_id: azureTid, name: 'Unregistered Azure Tenant', subscription_tier: 'trial' };
+      next(); return;
+    }
+
+    if (customTenantId) {
+      // Custom JWT → look up by Supabase tenant id
+      const { data: tenant } = await supabase
+        .from('tenants')
+        .select('*')
+        .eq('id', customTenantId)
+        .single();
+      if (tenant) {
+        req.tenant = { id: tenant.id, office365_tenant_id: tenant.office365_tenant_id, name: tenant.name, subscription_tier: tenant.subscription_tier };
+        next(); return;
+      }
+      res.status(401).json({ error: 'Tenant not found', statusCode: 401 });
       return;
     }
 
-    req.tenant = { id: tenant.id, office365_tenant_id: tenant.office365_tenant_id, name: tenant.name, subscription_tier: tenant.subscription_tier };
+    // No tenant claim → demo fallback
+    req.tenant = { id: DEMO_TENANT_ID, office365_tenant_id: undefined, name: 'Demo Tenant', subscription_tier: 'demo' };
     next();
   } catch (err) {
     logger.error('tenantMiddleware error:', err);
@@ -150,12 +171,13 @@ async function tenantMiddleware(req: Request, res: Response, next: NextFunction)
 }
 
 // Apply auth + tenant to all /api/ routes (except /api/auth, /api/health, /api/sessions)
+// /api/tenants only requires auth (no tenant isolation — it's a cross-tenant admin resource)
 app.use('/api/', (req, res, next) => {
   if (req.path.startsWith('/auth') || req.path === '/health' || req.path.startsWith('/system') || req.path.startsWith('/sessions')) return next();
   authMiddleware(req, res, next);
 });
 app.use('/api/', (req, res, next) => {
-  if (req.path.startsWith('/auth') || req.path === '/health' || req.path.startsWith('/system') || req.path.startsWith('/sessions')) return next();
+  if (req.path.startsWith('/auth') || req.path === '/health' || req.path.startsWith('/system') || req.path.startsWith('/sessions') || req.path.startsWith('/tenants')) return next();
   tenantMiddleware(req, res, next);
 });
 
@@ -533,6 +555,88 @@ app.get('/api/deploy/history', async (req: Request, res: Response) => {
     res.json({ data: enriched, count: enriched.length, statusCode: 200 });
   } catch (err) { logger.error('Deploy history error:', err); res.status(500).json({ error: 'Internal server error' }); }
 });
+
+// ─── Tenants (MSP admin — no per-tenant isolation) ───────────────────────────
+const tenantsRouter = express.Router();
+
+// GET /api/tenants — list all tenants
+tenantsRouter.get('/', async (_req, res) => {
+  try {
+    const supabase = getSupabase();
+    const { data, error } = await supabase.from('tenants').select('*').order('name');
+    if (error) throw error;
+
+    // Enrich with device count per tenant
+    const tenantIds = (data || []).map((t: Record<string, unknown>) => t.id as string);
+    let counts: Record<string, number> = {};
+    if (tenantIds.length) {
+      const { data: devCounts } = await supabase
+        .from('devices')
+        .select('tenant_id')
+        .in('tenant_id', tenantIds);
+      (devCounts || []).forEach((d: Record<string, unknown>) => {
+        const tid = d.tenant_id as string;
+        counts[tid] = (counts[tid] || 0) + 1;
+      });
+    }
+
+    const enriched = (data || []).map((t: Record<string, unknown>) => ({
+      ...t,
+      device_count: counts[t.id as string] || 0,
+    }));
+
+    res.json({ data: enriched, count: enriched.length, statusCode: 200 });
+  } catch (err) { logger.error('List tenants:', err); res.status(500).json({ error: 'Failed to list tenants' }); }
+});
+
+// POST /api/tenants — create new tenant
+tenantsRouter.post('/', async (req, res) => {
+  try {
+    const { name, office365_tenant_id, subscription_tier } = req.body as Record<string, string>;
+    if (!name) { res.status(400).json({ error: 'Missing required field: name' }); return; }
+    const supabase = getSupabase();
+    const { data, error } = await supabase
+      .from('tenants')
+      .insert({
+        name,
+        office365_tenant_id: office365_tenant_id || null,
+        subscription_tier: subscription_tier || 'starter',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .select('*')
+      .single();
+    if (error) { logger.error('Create tenant:', error); res.status(500).json({ error: 'Failed to create tenant' }); return; }
+    res.status(201).json({ data, statusCode: 201 });
+  } catch (err) { logger.error('Create tenant error:', err); res.status(500).json({ error: 'Internal server error' }); }
+});
+
+// PATCH /api/tenants/:id — update tenant
+tenantsRouter.patch('/:id', async (req, res) => {
+  try {
+    const { name, office365_tenant_id, subscription_tier } = req.body as Record<string, string>;
+    const supabase = getSupabase();
+    const { data, error } = await supabase
+      .from('tenants')
+      .update({ name, office365_tenant_id: office365_tenant_id || null, subscription_tier, updated_at: new Date().toISOString() })
+      .eq('id', req.params.id)
+      .select('*')
+      .single();
+    if (error || !data) { res.status(404).json({ error: 'Tenant not found' }); return; }
+    res.json({ data, statusCode: 200 });
+  } catch (err) { logger.error('Update tenant error:', err); res.status(500).json({ error: 'Internal server error' }); }
+});
+
+// DELETE /api/tenants/:id — delete tenant (use with caution)
+tenantsRouter.delete('/:id', async (req, res) => {
+  try {
+    const supabase = getSupabase();
+    await supabase.from('tenants').delete().eq('id', req.params.id);
+    res.json({ statusCode: 200 });
+  } catch (err) { logger.error('Delete tenant error:', err); res.status(500).json({ error: 'Internal server error' }); }
+});
+
+app.use('/api/tenants', tenantsRouter);
 
 // ─── Organizations ────────────────────────────────────────────────────────────
 const orgsRouter = express.Router();
