@@ -320,6 +320,18 @@ async function sendTelemetry() {
   });
 }
 
+// ─── Heartbeat léger (appelé avant les commandes longues) ────────────────────
+async function sendHeartbeat() {
+  try {
+    await request('PATCH', `/api/devices/${deviceDbId}`, {
+      status:        'online',
+      last_seen:     new Date().toISOString(),
+      ip_address:    getIpAddress(),
+      agent_version: AGENT_VERSION,
+    });
+  } catch {}
+}
+
 // ─── Step 5: Poll commands ────────────────────────────────────────────────────
 async function pollCommands() {
   const res = await request('GET', `/api/commands/${deviceDbId}/pending`, null);
@@ -604,6 +616,7 @@ async function executeCommand(type, params) {
 
     // ─── Déploiement logiciels ────────────────────────────────────────────��───
     case 'install_app': {
+      await sendHeartbeat(); // évite le passage offline pendant l'installation
       const machineArch = os.arch(); // 'x64', 'arm64', 'ia32'...
       const isARM64     = machineArch === 'arm64';
 
@@ -949,6 +962,7 @@ async function executeCommand(type, params) {
     case 'adwcleaner_scan':
     case 'adwcleaner_clean':
     case 'adwcleaner_purge': {
+      await sendHeartbeat(); // évite le passage offline pendant l'opération longue
       const fs   = require('fs');
       const path = require('path');
 

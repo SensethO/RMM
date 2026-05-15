@@ -189,10 +189,10 @@ devicesRouter.get('/', async (req: Request, res: Response) => {
     const { data: devicesRaw, error } = await query;
     if (error) { logger.error('List devices:', error); res.status(500).json({ error: 'Failed to list devices' }); return; }
 
-    // Auto-offline: mark devices as offline if last_seen > 3 minutes ago
-    const threeMinutesAgo = new Date(Date.now() - 3 * 60 * 1000).toISOString();
+    // Auto-offline: mark devices as offline if last_seen > 5 minutes ago
+    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
     const devices = (devicesRaw || []).map((d: Record<string, unknown>) => {
-      if (d.status === 'online' && d.last_seen && (d.last_seen as string) < threeMinutesAgo) {
+      if (d.status === 'online' && d.last_seen && (d.last_seen as string) < fiveMinutesAgo) {
         return { ...d, status: 'offline' };
       }
       return d;
@@ -209,8 +209,8 @@ devicesRouter.get('/:id', async (req: Request, res: Response) => {
     if (error || !device) { res.status(404).json({ error: 'Device not found' }); return; }
     const { data: telemetry } = await supabase.from('device_telemetry').select('*').eq('device_id', req.params.id).order('timestamp', { ascending: false }).limit(1).single();
     // Apply same auto-offline logic as list endpoint
-    const threeMinutesAgo = new Date(Date.now() - 3 * 60 * 1000).toISOString();
-    const effectiveStatus = (device.status === 'online' && device.last_seen && device.last_seen < threeMinutesAgo)
+    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    const effectiveStatus = (device.status === 'online' && device.last_seen && device.last_seen < fiveMinutesAgo)
       ? 'offline' : device.status;
     res.json({ data: { ...device, status: effectiveStatus, latest_telemetry: telemetry || null }, statusCode: 200 });
   } catch (err) { logger.error('Get device error:', err); res.status(500).json({ error: 'Internal server error' }); }
