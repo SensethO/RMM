@@ -192,10 +192,44 @@ devicesRouter.post('/register', async (req: Request, res: Response) => {
       res.status(400).json({ error: 'Missing required fields: device_id, device_name, os' }); return;
     }
     const supabase = getSupabase();
-    const { data: existing } = await supabase.from('devices').select('id').eq('tenant_id', req.tenant.id).eq('device_id', device_id).single();
-    if (existing) { res.status(400).json({ error: 'Device already registered' }); return; }
-    const { data: device, error } = await supabase.from('devices').insert({ tenant_id: req.tenant.id, device_id, device_name, os, os_version, hardware_id, user_id, status: 'offline', created_at: new Date().toISOString(), updated_at: new Date().toISOString() }).select().single();
-    if (error) { logger.error('Register device:', error); res.status(500).json({ error: 'Failed to register device' }); return; }
+
+    // Vérifier si le device existe déjà sous CE tenant → retourner l'existant
+    const { data: existingInTenant } = await supabase
+      .from('devices').select('*').eq('tenant_id', req.tenant.id).eq('device_id', device_id).single();
+    if (existingInTenant) {
+      // Mettre à jour et retourner
+      const { data: updated } = await supabase.from('devices')
+        .update({ device_name, os, os_version, hardware_id, user_id, updated_at: new Date().toISOString() })
+        .eq('id', existingInTenant.id).select().single();
+      res.json({ data: updated || existingInTenant, statusCode: 200 });
+      return;
+    }
+
+    // Tenter l'insertion (peut échouer si device_id UNIQUE global encore en place)
+    const { data: device, error } = await supabase.from('devices')
+      .insert({ tenant_id: req.tenant.id, device_id, device_name, os, os_version, hardware_id, user_id,
+                status: 'offline', created_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+      .select().single();
+
+    if (error) {
+      // Violation de contrainte UNIQUE → le device existe sous un autre tenant
+      // On le migre vers le tenant courant (cas MSP : changement de tenant)
+      if (error.code === '23505') {
+        logger.warn(`device_id ${device_id} existe sous un autre tenant — migration vers ${req.tenant.id}`);
+        const { data: oldDevice } = await supabase.from('devices').select('*').eq('device_id', device_id).single();
+        if (oldDevice) {
+          const { data: migrated, error: migErr } = await supabase.from('devices')
+            .update({ tenant_id: req.tenant.id, device_name, os, os_version, hardware_id, user_id,
+                      updated_at: new Date().toISOString() })
+            .eq('id', oldDevice.id).select().single();
+          if (migErr) { logger.error('Migrate device:', migErr); res.status(500).json({ error: 'Failed to migrate device' }); return; }
+          res.status(201).json({ data: migrated, statusCode: 201, migrated: true });
+          return;
+        }
+      }
+      logger.error('Register device:', error);
+      res.status(500).json({ error: 'Failed to register device' }); return;
+    }
     res.status(201).json({ data: device, statusCode: 201 });
   } catch (err) { logger.error('Register device error:', err); res.status(500).json({ error: 'Internal server error' }); }
 });
