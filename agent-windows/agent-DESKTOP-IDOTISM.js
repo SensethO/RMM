@@ -624,6 +624,40 @@ async function executeCommand(type, params) {
       const installArgs = params.install_args;
       const displayName = params.display_name || packageId || installUrl || 'Application';
 
+      // ── ADWCleaner : portable, téléchargement direct (winget hash instable) ──
+      if (packageId === 'Malwarebytes.AdwCleaner' && method === 'winget') {
+        const fs   = require('fs');
+        const path = require('path');
+        const adwDir  = 'C:\\AdwCleaner';
+        const adwPath = path.join(adwDir, 'adwcleaner.exe');
+        if (!fs.existsSync(adwDir)) fs.mkdirSync(adwDir, { recursive: true });
+        const adwUrl = 'https://adwcleaner.malwarebytes.com/adwcleaner?channel=release';
+        console.log(`   📥 ADWCleaner: téléchargement direct depuis Malwarebytes...`);
+
+        const downloadAdw = (url, left = 8) => new Promise((resolve, reject) => {
+          const mod = url.startsWith('https') ? https : http;
+          mod.get(url, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' } }, res => {
+            if ([301,302,303,307,308].includes(res.statusCode) && res.headers.location && left > 0) {
+              res.resume();
+              downloadAdw(res.headers.location, left - 1).then(resolve).catch(reject);
+            } else if (res.statusCode === 200) {
+              const chunks = [];
+              res.on('data', c => chunks.push(c));
+              res.on('end', () => resolve(Buffer.concat(chunks)));
+              res.on('error', reject);
+            } else {
+              reject(new Error(`HTTP ${res.statusCode}`));
+            }
+          }).on('error', reject);
+        });
+
+        const buf = await downloadAdw(adwUrl);
+        fs.writeFileSync(adwPath, buf);
+        const sizeMb = (buf.length / 1024 / 1024).toFixed(1);
+        console.log(`   ✅ ADWCleaner ${sizeMb} MB → ${adwPath}`);
+        return `✅ ADWCleaner installé (portable).\n📁 Chemin : ${adwPath}\n💾 Taille : ${sizeMb} MB\n\nPrêt pour adwcleaner_scan, adwcleaner_clean et adwcleaner_purge.`;
+      }
+
       if (method === 'winget') {
         if (!packageId) throw new Error('Parametre manquant : package_id');
 
