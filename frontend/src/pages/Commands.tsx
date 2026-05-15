@@ -110,6 +110,30 @@ const COMMAND_DEFS = [
     description: 'Télécharge et installe la dernière version de l\'agent',
     params: [],
   },
+  {
+    value: 'adwcleaner_scan',
+    label: 'ADW Scan',
+    icon: '🔍',
+    color: 'red',
+    description: 'Analyse silencieuse ADWCleaner (PUP, adware, malware)',
+    params: [],
+  },
+  {
+    value: 'adwcleaner_clean',
+    label: 'ADW Quarantaine',
+    icon: '🔒',
+    color: 'orange',
+    description: 'Met en quarantaine toutes les menaces trouvées',
+    params: [],
+  },
+  {
+    value: 'adwcleaner_purge',
+    label: 'ADW Purge',
+    icon: '🗑️',
+    color: 'red',
+    description: 'Supprime définitivement les éléments en quarantaine',
+    params: [],
+  },
 ] as const;
 
 type CommandType = typeof COMMAND_DEFS[number]['value'];

@@ -42,7 +42,7 @@ app.use((req, res, next) => {
 
 // ─── Health ──────────────────────────────────────────────────────────────────
 // ─── Versions ────────────────────────────────────────────────────────────────
-const EXPECTED_AGENT_VERSION = '1.1.4';
+const EXPECTED_AGENT_VERSION = '1.1.5';
 const APP_VERSION             = '1.1.0';
 
 app.get('/api/system/info', (_req, res) => {

@@ -5,7 +5,7 @@
  * Usage: node agent.js
  */
 
-const AGENT_VERSION = '1.1.4';
+const AGENT_VERSION = '1.1.5';
 const AGENT_RAW_URL = 'https://raw.githubusercontent.com/SensethO/RMM/master/agent-windows/agent.js';
 
 const https = require('https');
@@ -906,6 +906,146 @@ async function executeCommand(type, params) {
         console.log('   ❌ reg query échoué :', errMsg);
         return JSON.stringify([{ name: '[ERREUR] ' + errMsg, version: '', publisher: '', install_date: '' }]);
       }
+    }
+
+    // ─── ADWCleaner ──────────────────────────────────────────────────────────
+    case 'adwcleaner_scan':
+    case 'adwcleaner_clean':
+    case 'adwcleaner_purge': {
+      const fs   = require('fs');
+      const path = require('path');
+
+      // ── Trouver l'exécutable ADWCleaner ────────────────────────────────
+      const adwPaths = [
+        'C:\\Program Files\\Malwarebytes\\AdwCleaner\\adwcleaner.exe',
+        'C:\\Program Files (x86)\\Malwarebytes\\AdwCleaner\\adwcleaner.exe',
+        'C:\\AdwCleaner\\adwcleaner.exe',
+      ];
+      let adwExe = null;
+      for (const p of adwPaths) { if (fs.existsSync(p)) { adwExe = p; break; } }
+      if (!adwExe) {
+        try {
+          const w = execSync('where adwcleaner.exe 2>nul', { encoding: 'utf8', timeout: 3000, shell: 'cmd.exe' });
+          const found = w.trim().split('\n')[0]?.trim();
+          if (found && fs.existsSync(found)) adwExe = found;
+        } catch {}
+      }
+      if (!adwExe) {
+        throw new Error('ADWCleaner non trouvé. Installez-le via "Déploiements" > Malwarebytes.AdwCleaner.');
+      }
+
+      // ── PURGE ────────────────────────────────────────────────────────────
+      if (type === 'adwcleaner_purge') {
+        console.log('   🗑  Purge de la quarantaine ADWCleaner...');
+        try {
+          execSync(`"${adwExe}" /eula /quarantine purge`, { timeout: 60_000, shell: 'cmd.exe' });
+        } catch {}
+        // Fallback : supprimer manuellement le dossier quarantaine
+        const qDir = 'C:\\AdwCleaner\\Quarantine';
+        let purgedFiles = 0;
+        if (fs.existsSync(qDir)) {
+          try {
+            execSync(`rd /s /q "${qDir}" 2>nul`, { timeout: 10_000, shell: 'cmd.exe' });
+            purgedFiles = 1; // approximatif
+          } catch {}
+        }
+        return JSON.stringify({
+          action:  'purge',
+          date:    new Date().toISOString(),
+          message: '✅ Quarantaine vidée définitivement.',
+        });
+      }
+
+      // ── Fonction de parsing du log ADWCleaner ────────────────────────────
+      function parseAdwLog(content) {
+        const threats = [];
+        // Chaque section : ***** [ Catégorie ] *****
+        const sectionRe = /\*{5}\s*\[\s*([^\]]+?)\s*\]\s*\*{5}([\s\S]*?)(?=\*{5}\s*\[|#{5,}|$)/g;
+        let m;
+        while ((m = sectionRe.exec(content)) !== null) {
+          const category = m[1].trim();
+          for (const line of m[2].split('\n')) {
+            const t = line.trim();
+            if (!t || /^No\s/i.test(t) || t.startsWith('#')) continue;
+            // Format : "Threat.Type  /chemin/ou/clé"
+            const parts = t.match(/^([\w.\/-]+)\s{2,}(.+)$/);
+            if (parts) {
+              threats.push({ type: parts[1].trim(), category, path: parts[2].trim(), status: 'found' });
+            }
+          }
+        }
+        return threats;
+      }
+
+      // ── Trouver le dernier log ADWCleaner ────────────────────────────────
+      function findLatestLog(prefix) {
+        const logDir = 'C:\\AdwCleaner\\Logs';
+        if (!fs.existsSync(logDir)) return null;
+        const re = new RegExp(`AdwCleaner\\[${prefix}\\d+\\]\\.txt`, 'i');
+        const logs = fs.readdirSync(logDir).filter(f => re.test(f)).sort().reverse();
+        return logs[0] ? path.join(logDir, logs[0]) : null;
+      }
+
+      function readLog(logFile) {
+        // ADWCleaner écrit en UTF-16LE ou UTF-8 selon la version
+        try { return fs.readFileSync(logFile, 'utf16le'); } catch {}
+        try { return fs.readFileSync(logFile, 'utf8');    } catch {}
+        return '';
+      }
+
+      // ── CLEAN (quarantaine) ───────────────────────────────────────────────
+      if (type === 'adwcleaner_clean') {
+        console.log('   🔒 Mise en quarantaine des menaces...');
+        try {
+          execSync(`"${adwExe}" /eula /clean /noreboot`, { timeout: 180_000, shell: 'cmd.exe' });
+        } catch {}
+        const cleanLog = findLatestLog('C');
+        let quarantined = 0;
+        if (cleanLog) {
+          const content = readLog(cleanLog);
+          quarantined = parseAdwLog(content).length;
+        }
+        console.log(`   ✅ Quarantaine : ${quarantined} élément(s)`);
+        return JSON.stringify({
+          action:      'clean',
+          date:        new Date().toISOString(),
+          quarantined,
+          message:     `✅ ${quarantined} élément(s) mis en quarantaine.`,
+          log_path:    cleanLog || null,
+        });
+      }
+
+      // ── SCAN ─────────────────────────────────────────────────────────────
+      console.log('   🔍 Lancement du scan ADWCleaner (1-2 min)...');
+      try {
+        execSync(`"${adwExe}" /eula /scan /noreboot`, { timeout: 180_000, shell: 'cmd.exe' });
+      } catch {}  // exit code non-0 même si scan OK
+
+      // Chercher le log de scan [S##]
+      let scanLog = findLatestLog('S');
+      // Fallback : log dans le dossier racine AdwCleaner (anciennes versions)
+      if (!scanLog) {
+        const alt = 'C:\\AdwCleaner\\AdwCleaner[S00].txt';
+        if (fs.existsSync(alt)) scanLog = alt;
+      }
+      if (!scanLog) throw new Error('Log de scan ADWCleaner introuvable. Le scan a peut-être échoué.');
+
+      const content   = readLog(scanLog);
+      const threats   = parseAdwLog(content);
+      const verMatch  = content.match(/AdwCleaner\s+([\d.]+)/);
+      const dbMatch   = content.match(/Database:\s+(\S+)/);
+
+      const result = {
+        scan_date:     new Date().toISOString(),
+        version:       verMatch?.[1] || 'unknown',
+        database:      dbMatch?.[1]  || '',
+        threats_count: threats.length,
+        clean:         threats.length === 0,
+        threats,
+        log_path:      scanLog,
+      };
+      console.log(`   ✅ Scan terminé : ${threats.length} menace(s) trouvée(s)`);
+      return JSON.stringify(result);
     }
 
     default:

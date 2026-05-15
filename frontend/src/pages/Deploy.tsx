@@ -95,6 +95,7 @@ const APP_CATALOG: CatalogApp[] = [
   { id: 'reader',    name: 'Adobe Acrobat Reader', category: 'Bureautique', icon: '📕', package_id: 'Adobe.Acrobat.Reader.64-bit',   publisher: 'Adobe',       description: 'Lecteur PDF gratuit' },
   { id: 'slack',     name: 'Slack',             category: 'Bureautique',  icon: '💼', package_id: 'SlackTechnologies.Slack',           publisher: 'Slack',       description: 'Messagerie d\'équipe' },
   // Sécurité
+  { id: 'adwcleaner',   name: 'ADWCleaner',      category: 'Sécurité',     icon: '🧹', package_id: 'Malwarebytes.AdwCleaner',   publisher: 'Malwarebytes',description: 'Nettoyeur PUP/adware — scan RMM + quarantaine à distance' },
   { id: 'malwarebytes', name: 'Malwarebytes',   category: 'Sécurité',     icon: '🛡️', package_id: 'Malwarebytes.Malwarebytes',         publisher: 'Malwarebytes',description: 'Protection antimalware' },
   { id: 'bitwarden', name: 'Bitwarden',         category: 'Sécurité',     icon: '🔑', package_id: 'Bitwarden.Bitwarden',               publisher: 'Bitwarden',   description: 'Gestionnaire de mots de passe open-source' },
   { id: 'keepass',   name: 'KeePass',           category: 'Sécurité',     icon: '🗝️', package_id: 'DominikReichl.KeePass',             publisher: 'D.Reichl',    description: 'Gestionnaire de mots de passe local' },
@@ -103,6 +104,12 @@ const APP_CATALOG: CatalogApp[] = [
   { id: 'git',       name: 'Git',               category: 'Développement',icon: '🌿', package_id: 'Git.Git',                           publisher: 'Git',         description: 'Gestionnaire de versions' },
   { id: 'nodejs',    name: 'Node.js LTS',       category: 'Développement',icon: '💚', package_id: 'OpenJS.NodeJS.LTS',                 publisher: 'OpenJS',      description: 'Runtime JavaScript' },
   { id: 'python',    name: 'Python 3',          category: 'Développement',icon: '🐍', package_id: 'Python.Python.3',                   publisher: 'Python.org',  description: 'Langage de programmation Python' },
+  // Intelligence Artificielle
+  { id: 'chatgpt',    name: 'ChatGPT',            category: 'Intelligence Artificielle', icon: '🤖', package_id: '9NTM2QC6QWS7',               publisher: 'OpenAI',      description: 'Assistant IA conversationnel — app officielle OpenAI' },
+  { id: 'claude',     name: 'Claude',             category: 'Intelligence Artificielle', icon: '🧠', package_id: 'Anthropic.Claude',             publisher: 'Anthropic',   description: 'Assistant IA Anthropic — raisonnement avancé' },
+  { id: 'copilot',    name: 'Microsoft Copilot',  category: 'Intelligence Artificielle', icon: '🪟', package_id: '9NHT9RB2F4HD',                publisher: 'Microsoft',   description: 'IA intégrée à Windows & Microsoft 365' },
+  { id: 'perplexity', name: 'Perplexity AI',      category: 'Intelligence Artificielle', icon: '🔍', package_id: 'Perplexity.Perplexity',        publisher: 'Perplexity',  description: 'Moteur de recherche IA avec sources citées' },
+  { id: 'ollama',     name: 'Ollama',             category: 'Intelligence Artificielle', icon: '🦙', package_id: 'Ollama.Ollama',                publisher: 'Ollama',      description: 'Exécution locale de modèles IA (Llama, Mistral...)' },
   // Utilitaires
   { id: '7zip',      name: '7-Zip',             category: 'Utilitaires',  icon: '📦', package_id: '7zip.7zip',                         publisher: '7-Zip',       description: 'Archiveur gratuit haute compression' },
   { id: 'vlc',       name: 'VLC',               category: 'Utilitaires',  icon: '🎬', package_id: 'VideoLAN.VLC',                      publisher: 'VideoLAN',    description: 'Lecteur multimédia universel' },

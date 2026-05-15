@@ -31,5 +31,11 @@ export function useSystemInfo() {
 
 export function isAgentOutdated(deviceVersion: string | undefined, expected: string | undefined): boolean {
   if (!deviceVersion || !expected) return false;
-  return deviceVersion !== expected;
+  // Compare semver: only outdated if device version is STRICTLY lower than expected
+  const parse = (v: string) => v.split('.').map(n => parseInt(n, 10) || 0);
+  const [dMaj, dMin, dPatch] = parse(deviceVersion);
+  const [eMaj, eMin, ePatch] = parse(expected);
+  if (dMaj !== eMaj) return dMaj < eMaj;
+  if (dMin !== eMin) return dMin < eMin;
+  return dPatch < ePatch;
 }

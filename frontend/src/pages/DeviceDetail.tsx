@@ -279,6 +279,12 @@ export default function DeviceDetail() {
       {/* Network */}
       <NetworkSection deviceId={id!} />
 
+      {/* Security - ADWCleaner */}
+      <SecuritySection deviceId={id!} />
+
+      {/* Installed Apps */}
+      <InstalledAppsSection deviceId={id!} />
+
       {/* Recent Commands */}
       <div className="bg-white rounded-lg shadow p-6">
         <h2 className="text-lg font-semibold text-gray-800 mb-4">Recent Commands</h2>
@@ -322,6 +328,466 @@ function InfoRow({ label, value }: { label: string; value: React.ReactNode }) {
     <div className="flex justify-between items-start text-sm">
       <span className="text-gray-500 w-28 shrink-0">{label}</span>
       <span className="text-gray-900 text-right">{value}</span>
+    </div>
+  );
+}
+
+// ─── Security / ADWCleaner section ───────────────────────────────────────────
+interface AdwThreat {
+  type: string;
+  category: string;
+  path: string;
+  status: string;
+}
+interface AdwScanResult {
+  scan_date: string;
+  version: string;
+  database: string;
+  threats_count: number;
+  clean: boolean;
+  threats: AdwThreat[];
+  log_path?: string;
+}
+interface AdwCleanResult {
+  action: string;
+  date: string;
+  quarantined: number;
+  message: string;
+}
+
+function SecuritySection({ deviceId }: { deviceId: string }) {
+  const [scanResult, setScanResult]     = useState<AdwScanResult | null>(null);
+  const [loading, setLoading]           = useState(false);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [error, setError]               = useState<string | null>(null);
+  const [message, setMessage]           = useState<string | null>(null);
+  const [confirmed, setConfirmed]       = useState(false);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    loadLastScan();
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, [deviceId]);
+
+  async function loadLastScan() {
+    try {
+      const hist = await commandAPI.getHistory(deviceId, 50);
+      const cmds = (hist.data.data as Record<string, unknown>[]) || [];
+      const recent = cmds.find(c => c.command_type === 'adwcleaner_scan' && c.status === 'success');
+      if (recent?.output) {
+        try { setScanResult(JSON.parse(recent.output as string) as AdwScanResult); } catch {}
+      }
+    } catch {}
+  }
+
+  function pollCmd(
+    cmdId: string,
+    onSuccess: (output: string) => void,
+    onError: (msg: string) => void,
+  ) {
+    let attempts = 0;
+    pollRef.current = setInterval(async () => {
+      if (++attempts > 60) { // 3 min max
+        clearInterval(pollRef.current!);
+        onError("Timeout — l'agent ne répond pas");
+        return;
+      }
+      try {
+        const hist = await commandAPI.getHistory(deviceId, 10);
+        const cmd = (hist.data.data as Record<string, unknown>[])?.find(c => c.id === cmdId);
+        if (cmd?.status === 'success' && cmd.output) {
+          clearInterval(pollRef.current!);
+          onSuccess(cmd.output as string);
+        } else if (cmd?.status === 'failed') {
+          clearInterval(pollRef.current!);
+          onError((cmd.output as string) || 'Commande échouée');
+        }
+      } catch {}
+    }, 3000);
+  }
+
+  async function runScan() {
+    setLoading(true); setError(null); setMessage(null);
+    try {
+      const res = await commandAPI.queue(deviceId, { command_type: 'adwcleaner_scan' });
+      const cmdId = (res.data.data as Record<string, unknown>).id as string;
+      pollCmd(cmdId,
+        (out) => {
+          try { setScanResult(JSON.parse(out) as AdwScanResult); } catch {}
+          setLoading(false);
+        },
+        (err) => { setError(err); setLoading(false); }
+      );
+    } catch (e) { setError(e instanceof Error ? e.message : 'Erreur'); setLoading(false); }
+  }
+
+  async function runClean() {
+    setActionLoading('clean'); setError(null); setMessage(null);
+    try {
+      const res = await commandAPI.queue(deviceId, { command_type: 'adwcleaner_clean' });
+      const cmdId = (res.data.data as Record<string, unknown>).id as string;
+      pollCmd(cmdId,
+        (out) => {
+          try {
+            const r = JSON.parse(out) as AdwCleanResult;
+            setMessage(r.message || `✅ ${r.quarantined} élément(s) mis en quarantaine.`);
+          } catch { setMessage('✅ Quarantaine effectuée.'); }
+          setActionLoading(null);
+          loadLastScan();
+        },
+        (err) => { setError(err); setActionLoading(null); }
+      );
+    } catch (e) { setError(e instanceof Error ? e.message : 'Erreur'); setActionLoading(null); }
+  }
+
+  async function runPurge() {
+    setActionLoading('purge'); setError(null); setMessage(null); setConfirmed(false);
+    try {
+      const res = await commandAPI.queue(deviceId, { command_type: 'adwcleaner_purge' });
+      const cmdId = (res.data.data as Record<string, unknown>).id as string;
+      pollCmd(cmdId,
+        () => { setMessage('✅ Quarantaine vidée définitivement.'); setActionLoading(null); },
+        (err) => { setError(err); setActionLoading(null); }
+      );
+    } catch (e) { setError(e instanceof Error ? e.message : 'Erreur'); setActionLoading(null); }
+  }
+
+  function threatColor(type: string): string {
+    if (/PUP|Optional/i.test(type))     return 'bg-yellow-50 text-yellow-800 border-yellow-200';
+    if (/Adware/i.test(type))           return 'bg-orange-50 text-orange-800 border-orange-200';
+    if (/Malware|Trojan|Virus/i.test(type)) return 'bg-red-50 text-red-800 border-red-200';
+    return 'bg-gray-50 text-gray-700 border-gray-200';
+  }
+
+  return (
+    <div className="bg-white rounded-lg shadow p-6">
+      {/* Header */}
+      <div className="flex items-center justify-between border-b pb-3 mb-4">
+        <h2 className="text-lg font-semibold text-gray-800">🛡️ ADWCleaner — Analyse sécurité</h2>
+        <button
+          onClick={runScan}
+          disabled={loading || !!actionLoading}
+          className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-semibold rounded-lg transition disabled:opacity-50"
+        >
+          {loading ? '⏳ Scan en cours...' : '🔍 Lancer un scan'}
+        </button>
+      </div>
+
+      {/* Scan progress */}
+      {loading && (
+        <div className="mb-4 space-y-2">
+          <div className="flex items-center gap-2 text-gray-500 text-sm">
+            <div className="animate-spin h-4 w-4 border-2 border-red-500 border-t-transparent rounded-full" />
+            Analyse en cours sur l'agent distant... (1–2 minutes)
+          </div>
+          <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
+            <div className="h-2 bg-red-500 rounded-full animate-pulse" style={{ width: '40%' }} />
+          </div>
+        </div>
+      )}
+
+      {/* Action progress */}
+      {actionLoading && (
+        <div className="mb-3 flex items-center gap-2 text-gray-500 text-sm">
+          <div className="animate-spin h-4 w-4 border-2 border-orange-500 border-t-transparent rounded-full" />
+          {actionLoading === 'clean' ? 'Mise en quarantaine en cours...' : 'Purge en cours...'}
+        </div>
+      )}
+
+      {error   && <p className="text-red-500   text-sm mb-3">{error}</p>}
+      {message && <p className="text-green-600 text-sm mb-3 font-medium">{message}</p>}
+
+      {/* Scan results */}
+      {scanResult && (
+        <div className="space-y-4">
+          {/* Summary badge */}
+          <div className="flex flex-wrap items-center gap-3">
+            <span className={`px-4 py-2 rounded-lg font-semibold text-sm ${
+              scanResult.clean
+                ? 'bg-green-100 text-green-800'
+                : 'bg-red-100 text-red-800'
+            }`}>
+              {scanResult.clean ? '✅ Système propre' : `⚠️ ${scanResult.threats_count} menace(s) détectée(s)`}
+            </span>
+            <span className="text-xs text-gray-400">
+              Scanné le {new Date(scanResult.scan_date).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+              {scanResult.version !== 'unknown' ? ` · ADWCleaner v${scanResult.version}` : ''}
+            </span>
+          </div>
+
+          {/* Action buttons */}
+          {!scanResult.clean && (
+            <div className="flex flex-wrap gap-3">
+              {/* Quarantine */}
+              <button
+                onClick={runClean}
+                disabled={loading || !!actionLoading}
+                className="px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white text-sm font-semibold rounded-lg transition disabled:opacity-50"
+              >
+                🔒 Mettre en quarantaine ({scanResult.threats_count})
+              </button>
+
+              {/* Ignore */}
+              <button
+                onClick={() => setMessage('ℹ️ Menaces laissées en place. Aucune action effectuée.')}
+                disabled={loading || !!actionLoading}
+                className="px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm font-semibold rounded-lg transition disabled:opacity-50"
+              >
+                🚫 Ignorer / Laisser en place
+              </button>
+
+              {/* Purge — confirmation inline */}
+              {!confirmed ? (
+                <button
+                  onClick={() => setConfirmed(true)}
+                  disabled={loading || !!actionLoading}
+                  className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-semibold rounded-lg transition disabled:opacity-50"
+                >
+                  🗑️ Supprimer définitivement
+                </button>
+              ) : (
+                <div className="flex items-center gap-2 bg-red-50 border border-red-300 rounded-lg px-3 py-2">
+                  <span className="text-red-700 text-xs font-semibold">⚠️ Irréversible — confirmer ?</span>
+                  <button onClick={runPurge} className="px-3 py-1 bg-red-600 text-white text-xs font-bold rounded hover:bg-red-700">Oui, supprimer</button>
+                  <button onClick={() => setConfirmed(false)} className="px-3 py-1 bg-gray-200 text-gray-700 text-xs font-bold rounded hover:bg-gray-300">Annuler</button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Threats table */}
+          {scanResult.threats.length > 0 && (
+            <div className="overflow-x-auto rounded-lg border border-gray-200" style={{ maxHeight: '320px', overflowY: 'auto' }}>
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 border-b" style={{ position: 'sticky', top: 0, zIndex: 1 }}>
+                  <tr>
+                    <th className="px-4 py-2 text-left font-semibold text-gray-600">Type</th>
+                    <th className="px-4 py-2 text-left font-semibold text-gray-600">Catégorie</th>
+                    <th className="px-4 py-2 text-left font-semibold text-gray-600">Chemin / Clé</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {scanResult.threats.map((t, i) => (
+                    <tr key={i} className="border-b hover:bg-gray-50">
+                      <td className="px-3 py-2">
+                        <span className={`text-xs font-mono font-semibold px-2 py-1 rounded border ${threatColor(t.type)}`}>{t.type}</span>
+                      </td>
+                      <td className="px-4 py-2 text-gray-500 text-xs whitespace-nowrap">{t.category}</td>
+                      <td className="px-4 py-2 text-gray-700 text-xs font-mono break-all max-w-xs">{t.path}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Purge button when clean */}
+          {scanResult.clean && (
+            <div className="flex items-center gap-3">
+              {!confirmed ? (
+                <button
+                  onClick={() => setConfirmed(true)}
+                  disabled={!!actionLoading}
+                  className="text-xs text-gray-400 hover:text-red-500 underline"
+                >
+                  Vider la quarantaine existante
+                </button>
+              ) : (
+                <div className="flex items-center gap-2 bg-red-50 border border-red-300 rounded-lg px-3 py-2">
+                  <span className="text-red-700 text-xs font-semibold">⚠️ Supprimer la quarantaine ?</span>
+                  <button onClick={runPurge} className="px-3 py-1 bg-red-600 text-white text-xs font-bold rounded hover:bg-red-700">Oui</button>
+                  <button onClick={() => setConfirmed(false)} className="px-3 py-1 bg-gray-200 text-gray-700 text-xs font-bold rounded hover:bg-gray-300">Non</button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {!scanResult && !loading && (
+        <p className="text-gray-400 text-sm">
+          Cliquez sur "Lancer un scan" pour analyser ce device avec ADWCleaner.<br />
+          <span className="text-xs">ADWCleaner doit être installé sur le device (Déploiements → Sécurité → ADWCleaner).</span>
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ─── Installed Apps section ───────────────────────────────────────────────────
+interface InstalledApp {
+  name: string;
+  version?: string;
+  publisher?: string;
+  install_date?: string;
+}
+
+function InstalledAppsSection({ deviceId }: { deviceId: string }) {
+  const [apps, setApps]             = useState<InstalledApp[] | null>(null);
+  const [loading, setLoading]       = useState(false);
+  const [error, setError]           = useState<string | null>(null);
+  const [lastScanned, setLastScanned] = useState<string | null>(null);
+  const [search, setSearch]         = useState('');
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    loadApps();
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, [deviceId]);
+
+  async function loadApps() {
+    try {
+      const hist = await commandAPI.getHistory(deviceId, 50);
+      const cmds = (hist.data.data as Record<string, unknown>[]) || [];
+      const recent = cmds.find(c => c.command_type === 'list_installed_apps' && c.status === 'success');
+      if (recent?.output) {
+        try {
+          // The output may be truncated by DB — extract valid JSON array
+          let raw = (recent.output as string).trim();
+          if (raw.startsWith('[')) {
+            // Try full parse; if it fails try to truncate at last complete object
+            try {
+              const parsed = JSON.parse(raw);
+              if (Array.isArray(parsed)) {
+                setApps(parsed as InstalledApp[]);
+                setLastScanned(recent.created_at as string);
+              }
+            } catch {
+              // Truncated JSON — find last '}' and close the array
+              const lastBrace = raw.lastIndexOf('}');
+              if (lastBrace > 0) {
+                const repaired = raw.slice(0, lastBrace + 1) + ']';
+                const parsed = JSON.parse(repaired);
+                if (Array.isArray(parsed)) {
+                  setApps(parsed as InstalledApp[]);
+                  setLastScanned(recent.created_at as string);
+                }
+              }
+            }
+          }
+        } catch {}
+      }
+    } catch {}
+  }
+
+  async function runScan() {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await commandAPI.queue(deviceId, { command_type: 'list_installed_apps' });
+      const cmdId = (res.data.data as Record<string, unknown>).id as string;
+      let attempts = 0;
+      pollRef.current = setInterval(async () => {
+        attempts++;
+        if (attempts > 20) {
+          clearInterval(pollRef.current!);
+          setError("Timeout — l'agent ne répond pas");
+          setLoading(false);
+          return;
+        }
+        try {
+          const hist = await commandAPI.getHistory(deviceId, 10);
+          const cmd = (hist.data.data as Record<string, unknown>[])?.find(c => c.id === cmdId);
+          if (cmd?.status === 'success' && cmd.output) {
+            clearInterval(pollRef.current!);
+            try {
+              let raw = (cmd.output as string).trim();
+              let parsed: InstalledApp[] = [];
+              try { parsed = JSON.parse(raw); } catch {
+                const lastBrace = raw.lastIndexOf('}');
+                if (lastBrace > 0) parsed = JSON.parse(raw.slice(0, lastBrace + 1) + ']');
+              }
+              setApps(Array.isArray(parsed) ? parsed : []);
+              setLastScanned(cmd.created_at as string);
+            } catch { setApps([]); }
+            setLoading(false);
+          } else if (cmd?.status === 'failed') {
+            clearInterval(pollRef.current!);
+            setError((cmd.output as string) || 'Échec du scan');
+            setLoading(false);
+          }
+        } catch {}
+      }, 3000);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Erreur');
+      setLoading(false);
+    }
+  }
+
+  const filtered = apps
+    ? apps.filter(a =>
+        a.name.toLowerCase().includes(search.toLowerCase()) ||
+        (a.publisher || '').toLowerCase().includes(search.toLowerCase())
+      )
+    : [];
+
+  return (
+    <div className="bg-white rounded-lg shadow p-6">
+      <div className="flex items-center justify-between border-b pb-3 mb-4">
+        <h2 className="text-lg font-semibold text-gray-800">📦 Applications installées</h2>
+        <button
+          onClick={runScan}
+          disabled={loading}
+          className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold rounded-lg transition disabled:opacity-50"
+        >
+          {loading ? '⏳ Scan en cours...' : '🔍 Scanner'}
+        </button>
+      </div>
+
+      {loading && !apps && (
+        <div className="flex items-center gap-2 text-gray-500 text-sm py-4">
+          <div className="animate-spin h-4 w-4 border-2 border-indigo-500 border-t-transparent rounded-full" />
+          Analyse du registre Windows...
+        </div>
+      )}
+      {error && <p className="text-red-500 text-sm mb-3">{error}</p>}
+
+      {apps && (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between text-sm text-gray-500">
+            <span><strong>{apps.length}</strong> application{apps.length > 1 ? 's' : ''} trouvée{apps.length > 1 ? 's' : ''}</span>
+            {lastScanned && (
+              <span>Scanné le {new Date(lastScanned).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
+            )}
+          </div>
+          <input
+            type="text"
+            placeholder="🔎 Rechercher une application ou un éditeur..."
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+          />
+          <div className="overflow-x-auto rounded-lg border border-gray-200" style={{ maxHeight: '360px', overflowY: 'auto' }}>
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 border-b" style={{ position: 'sticky', top: 0, zIndex: 1 }}>
+                <tr>
+                  <th className="px-4 py-2 text-left font-semibold text-gray-600">Nom</th>
+                  <th className="px-4 py-2 text-left font-semibold text-gray-600">Version</th>
+                  <th className="px-4 py-2 text-left font-semibold text-gray-600">Éditeur</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((app, i) => (
+                  <tr key={i} className="border-b hover:bg-gray-50">
+                    <td className="px-4 py-2 font-medium text-gray-800">{app.name}</td>
+                    <td className="px-4 py-2 font-mono text-gray-600 text-xs">{app.version || '—'}</td>
+                    <td className="px-4 py-2 text-gray-500 text-xs">{app.publisher || '—'}</td>
+                  </tr>
+                ))}
+                {filtered.length === 0 && (
+                  <tr>
+                    <td colSpan={3} className="px-4 py-6 text-center text-gray-400">Aucun résultat</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {!apps && !loading && !error && (
+        <p className="text-gray-400 text-sm">Cliquez sur "Scanner" pour inventorier les applications installées sur ce device.</p>
+      )}
     </div>
   );
 }
