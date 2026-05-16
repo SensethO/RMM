@@ -90,6 +90,7 @@ export interface TenantContext {
   office365_tenant_id?: string;
   name: string;
   subscription_tier: string;
+  isSuperAdmin?: boolean;
 }
 
 // API Response Types
