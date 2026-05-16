@@ -57,6 +57,16 @@ app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString(), environment: process.env.NODE_ENV || 'development' });
 });
 
+// DEBUG: Check environment variables (remove in production)
+app.get('/api/debug/config', (_req, res) => {
+  res.json({
+    NODE_ENV: process.env.NODE_ENV,
+    SUPER_ADMIN_GROUP_ID: process.env.SUPER_ADMIN_GROUP_ID || 'NOT_SET',
+    JWT_SECRET: process.env.JWT_SECRET ? '***SET***' : 'NOT_SET',
+    SUPABASE_URL: process.env.SUPABASE_URL ? '***SET***' : 'NOT_SET',
+  });
+});
+
 // ─── Auth route (no middleware) ───────────────────────────────────────────────
 app.post('/api/auth/login', (req: Request, res: Response) => {
   const { username, password, tenant_id } = req.body as { username?: string; password?: string; tenant_id?: string };
