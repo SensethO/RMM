@@ -80,6 +80,10 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
 });
 
 // ─── Auth middleware ──────────────────────────────────────────────────────────
+// SUPER_ADMIN_GROUP_ID: Configure this to your Azure AD group GUID for RMM super-admins
+// Example: '00000000-0000-0000-0000-000000000001'
+const SUPER_ADMIN_GROUP_ID = process.env.SUPER_ADMIN_GROUP_ID || '';
+
 function authMiddleware(req: Request, res: Response, next: NextFunction): void {
   try {
     const authHeader = req.headers.authorization;
@@ -107,10 +111,18 @@ function authMiddleware(req: Request, res: Response, next: NextFunction): void {
     // Distinguish Azure AD tokens (claim: 'tid') from custom JWTs (claim: 'tenant_id')
     const azureTid       = decoded.tid        as string | undefined;  // Azure AD tenant GUID
     const customTenantId = decoded.tenant_id  as string | undefined;  // custom JWT claim
+    const groups         = (decoded.groups || []) as string[];        // Azure AD group IDs
+
+    // Check if user is super-admin (member of SUPER_ADMIN_GROUP_ID)
+    const isSuperAdmin = SUPER_ADMIN_GROUP_ID && groups.includes(SUPER_ADMIN_GROUP_ID);
+
     (req as unknown as Record<string, unknown>)._azureTid       = azureTid;
     (req as unknown as Record<string, unknown>)._customTenantId = customTenantId;
-    (req as unknown as Record<string, unknown>)._userId   = userId;
-    (req as unknown as Record<string, unknown>)._token    = token;
+    (req as unknown as Record<string, unknown>)._userId         = userId;
+    (req as unknown as Record<string, unknown>)._token          = token;
+    (req as unknown as Record<string, unknown>)._isSuperAdmin   = isSuperAdmin;
+
+    if (isSuperAdmin) logger.info(`Super-admin access for user ${userId}`);
     next();
   } catch (err) {
     logger.error('authMiddleware error:', err);
@@ -126,6 +138,20 @@ async function tenantMiddleware(req: Request, res: Response, next: NextFunction)
     const r = req as unknown as Record<string, unknown>;
     const azureTid       = r._azureTid       as string | undefined;
     const customTenantId = r._customTenantId as string | undefined;
+    const isSuperAdmin   = r._isSuperAdmin   as boolean | undefined;
+
+    // Super-admin users can see ALL tenants (no tenant isolation)
+    if (isSuperAdmin) {
+      req.tenant = {
+        id: null,  // null = see all tenants
+        office365_tenant_id: undefined,
+        name: 'Super-Admin (All Tenants)',
+        subscription_tier: 'enterprise',
+        isSuperAdmin: true,
+      };
+      logger.info('Super-admin context: viewing all tenants');
+      next(); return;
+    }
 
     const supabase = getSupabase();
 
@@ -194,8 +220,11 @@ devicesRouter.post('/register', async (req: Request, res: Response) => {
     const supabase = getSupabase();
 
     // Vérifier si le device existe déjà sous CE tenant → retourner l'existant
-    const { data: existingInTenant } = await supabase
-      .from('devices').select('*').eq('tenant_id', req.tenant.id).eq('device_id', device_id).single();
+    let existingQuery = supabase.from('devices').select('*');
+    if (req.tenant.id) {
+      existingQuery = existingQuery.eq('tenant_id', req.tenant.id);
+    }
+    const { data: existingInTenant } = await existingQuery.eq('device_id', device_id).single();
     if (existingInTenant) {
       // Mettre à jour et retourner
       const { data: updated } = await supabase.from('devices')
@@ -240,7 +269,16 @@ devicesRouter.get('/', async (req: Request, res: Response) => {
     const limit  = parseInt(req.query.limit  as string) || 100;
     const offset = parseInt(req.query.offset as string) || 0;
     const supabase = getSupabase();
-    let query = supabase.from('devices').select('*').eq('tenant_id', req.tenant.id).order('created_at', { ascending: false }).range(offset, offset + limit - 1);
+    let query = supabase.from('devices').select('*');
+
+    // Super-admin (req.tenant.id === null) sees all devices
+    if (req.tenant.id) {
+      query = query.eq('tenant_id', req.tenant.id);
+    } else {
+      logger.info('Super-admin listing all devices');
+    }
+
+    query = query.order('created_at', { ascending: false }).range(offset, offset + limit - 1);
     if (req.query.status) query = query.eq('status', req.query.status as string);
     const { data: devicesRaw, error } = await query;
     if (error) { logger.error('List devices:', error); res.status(500).json({ error: 'Failed to list devices' }); return; }
@@ -261,7 +299,14 @@ devicesRouter.get('/:id', async (req: Request, res: Response) => {
   try {
     if (!req.tenant) { res.status(401).json({ error: 'Missing tenant context' }); return; }
     const supabase = getSupabase();
-    const { data: device, error } = await supabase.from('devices').select('*').eq('tenant_id', req.tenant.id).eq('id', req.params.id).single();
+    let query = supabase.from('devices').select('*');
+
+    // Super-admin can access any device; others only their tenant's devices
+    if (req.tenant.id) {
+      query = query.eq('tenant_id', req.tenant.id);
+    }
+
+    const { data: device, error } = await query.eq('id', req.params.id).single();
     if (error || !device) { res.status(404).json({ error: 'Device not found' }); return; }
     const { data: telemetry } = await supabase.from('device_telemetry').select('*').eq('device_id', req.params.id).order('timestamp', { ascending: false }).limit(1).single();
     // Apply same auto-offline logic as list endpoint
@@ -281,7 +326,13 @@ devicesRouter.patch('/:id', async (req: Request, res: Response) => {
     const supabase = getSupabase();
     const updatePayload: Record<string, unknown> = { status, ip_address, last_seen: last_seen || new Date().toISOString(), updated_at: new Date().toISOString() };
     if (agent_version) updatePayload.agent_version = agent_version;
-    const { data: device, error } = await supabase.from('devices').update(updatePayload).eq('tenant_id', req.tenant.id).eq('id', req.params.id).select().single();
+
+    let updateQuery = supabase.from('devices').update(updatePayload);
+    if (req.tenant.id) {
+      updateQuery = updateQuery.eq('tenant_id', req.tenant.id);
+    }
+
+    const { data: device, error } = await updateQuery.eq('id', req.params.id).select().single();
     if (error || !device) { res.status(404).json({ error: 'Device not found' }); return; }
     res.json({ data: device, statusCode: 200 });
   } catch (err) { logger.error('Update device error:', err); res.status(500).json({ error: 'Internal server error' }); }
@@ -297,12 +348,20 @@ app.post('/api/devices/:device_id/telemetry', async (req: Request, res: Response
     if (cpu_percent === undefined || ram_percent === undefined || disk_percent === undefined) { res.status(400).json({ error: 'Missing required fields' }); return; }
     if ([cpu_percent, ram_percent, disk_percent].some(v => v < 0 || v > 100)) { res.status(400).json({ error: 'Percentage values must be between 0 and 100' }); return; }
     const supabase = getSupabase();
-    const { data: device } = await supabase.from('devices').select('id').eq('tenant_id', req.tenant.id).eq('id', req.params.device_id).single();
+    let deviceQuery = supabase.from('devices').select('id');
+    if (req.tenant.id) {
+      deviceQuery = deviceQuery.eq('tenant_id', req.tenant.id);
+    }
+    const { data: device } = await deviceQuery.eq('id', req.params.device_id).single();
     if (!device) { res.status(404).json({ error: 'Device not found' }); return; }
     const { data: telemetry, error } = await supabase.from('device_telemetry').insert({ device_id: req.params.device_id, cpu_percent, ram_percent, disk_percent, network_bytes_sec: network_bytes_sec || 0, timestamp: new Date().toISOString() }).select().single();
     if (error) { logger.error('Store telemetry:', error); res.status(500).json({ error: 'Failed to store telemetry' }); return; }
     // Update last_seen + ensure status=online on every telemetry
-    await supabase.from('devices').update({ last_seen: new Date().toISOString(), status: 'online', updated_at: new Date().toISOString() }).eq('id', req.params.device_id).eq('tenant_id', req.tenant.id);
+    let updateQuery = supabase.from('devices').update({ last_seen: new Date().toISOString(), status: 'online', updated_at: new Date().toISOString() }).eq('id', req.params.device_id);
+    if (req.tenant.id) {
+      updateQuery = updateQuery.eq('tenant_id', req.tenant.id);
+    }
+    await updateQuery;
 
     // ─── Auto-alert based on configured thresholds ──────────────────────────
     try {
@@ -339,7 +398,11 @@ app.get('/api/devices/:device_id/telemetry', async (req: Request, res: Response)
     if (!req.tenant) { res.status(401).json({ error: 'Missing tenant context' }); return; }
     const limit = parseInt(req.query.limit as string) || 100;
     const supabase = getSupabase();
-    const { data: device } = await supabase.from('devices').select('id').eq('tenant_id', req.tenant.id).eq('id', req.params.device_id).single();
+    let deviceQuery = supabase.from('devices').select('id');
+    if (req.tenant.id) {
+      deviceQuery = deviceQuery.eq('tenant_id', req.tenant.id);
+    }
+    const { data: device } = await deviceQuery.eq('id', req.params.device_id).single();
     if (!device) { res.status(404).json({ error: 'Device not found' }); return; }
     const { data: telemetry, error } = await supabase.from('device_telemetry').select('*').eq('device_id', req.params.device_id).order('timestamp', { ascending: false }).limit(limit);
     if (error) { logger.error('Get telemetry:', error); res.status(500).json({ error: 'Failed to fetch telemetry' }); return; }
@@ -355,9 +418,17 @@ commandsRouter.get('/:device_id/pending', async (req: Request, res: Response) =>
     if (!req.tenant) { res.status(401).json({ error: 'Missing tenant context' }); return; }
     const limit = parseInt(req.query.limit as string) || 10;
     const supabase = getSupabase();
-    const { data: device } = await supabase.from('devices').select('id').eq('tenant_id', req.tenant.id).eq('id', req.params.device_id).single();
+    let deviceQuery = supabase.from('devices').select('id');
+    if (req.tenant.id) {
+      deviceQuery = deviceQuery.eq('tenant_id', req.tenant.id);
+    }
+    const { data: device } = await deviceQuery.eq('id', req.params.device_id).single();
     if (!device) { res.status(404).json({ error: 'Device not found' }); return; }
-    const { data: commands, error } = await supabase.from('commands').select('*').eq('tenant_id', req.tenant.id).eq('device_id', req.params.device_id).eq('status', 'pending').order('created_at', { ascending: true }).limit(limit);
+    let commandsQuery = supabase.from('commands').select('*');
+    if (req.tenant.id) {
+      commandsQuery = commandsQuery.eq('tenant_id', req.tenant.id);
+    }
+    const { data: commands, error } = await commandsQuery.eq('device_id', req.params.device_id).eq('status', 'pending').order('created_at', { ascending: true }).limit(limit);
     if (error) { logger.error('Get pending commands:', error); res.status(500).json({ error: 'Failed to fetch commands' }); return; }
     res.json({ data: commands || [], count: (commands || []).length, statusCode: 200 });
   } catch (err) { logger.error('Get pending commands error:', err); res.status(500).json({ error: 'Internal server error' }); }
@@ -369,9 +440,21 @@ commandsRouter.post('/:device_id', async (req: Request, res: Response) => {
     const { command_type, params } = req.body as { command_type?: string; params?: Record<string, unknown> };
     if (!command_type) { res.status(400).json({ error: 'Missing required field: command_type' }); return; }
     const supabase = getSupabase();
-    const { data: device } = await supabase.from('devices').select('id').eq('tenant_id', req.tenant.id).eq('id', req.params.device_id).single();
+    let deviceQuery = supabase.from('devices').select('id');
+    if (req.tenant.id) {
+      deviceQuery = deviceQuery.eq('tenant_id', req.tenant.id);
+    }
+    const { data: device } = await deviceQuery.eq('id', req.params.device_id).single();
     if (!device) { res.status(404).json({ error: 'Device not found' }); return; }
-    const { data: command, error } = await supabase.from('commands').insert({ tenant_id: req.tenant.id, device_id: req.params.device_id, command_type, params: params || {}, status: 'pending', retry_count: 0, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }).select().single();
+
+    // For super-admin, need to find the device's actual tenant_id to use in command
+    let deviceTenantId = req.tenant.id;
+    if (req.tenant.id === null) {
+      const { data: actualDevice } = await supabase.from('devices').select('tenant_id').eq('id', req.params.device_id).single();
+      deviceTenantId = actualDevice?.tenant_id;
+    }
+
+    const { data: command, error } = await supabase.from('commands').insert({ tenant_id: deviceTenantId, device_id: req.params.device_id, command_type, params: params || {}, status: 'pending', retry_count: 0, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }).select().single();
     if (error) { logger.error('Queue command:', error); res.status(500).json({ error: 'Failed to queue command' }); return; }
     res.status(201).json({ data: command, statusCode: 201 });
   } catch (err) { logger.error('Queue command error:', err); res.status(500).json({ error: 'Internal server error' }); }
@@ -384,7 +467,11 @@ commandsRouter.patch('/:id', async (req: Request, res: Response) => {
     if (!status) { res.status(400).json({ error: 'Missing required field: status' }); return; }
     if (!['executing', 'success', 'failed', 'timeout'].includes(status)) { res.status(400).json({ error: 'Invalid status value' }); return; }
     const supabase = getSupabase();
-    const { data: command, error } = await supabase.from('commands').update({ status, exit_code, output, executed_at: status === 'executing' ? new Date().toISOString() : undefined, updated_at: new Date().toISOString() }).eq('tenant_id', req.tenant.id).eq('id', req.params.id).select().single();
+    let updateQuery = supabase.from('commands').update({ status, exit_code, output, executed_at: status === 'executing' ? new Date().toISOString() : undefined, updated_at: new Date().toISOString() });
+    if (req.tenant.id) {
+      updateQuery = updateQuery.eq('tenant_id', req.tenant.id);
+    }
+    const { data: command, error } = await updateQuery.eq('id', req.params.id).select().single();
     if (error || !command) { res.status(404).json({ error: 'Command not found' }); return; }
     res.json({ data: command, statusCode: 200 });
   } catch (err) { logger.error('Update command error:', err); res.status(500).json({ error: 'Internal server error' }); }
@@ -395,9 +482,17 @@ commandsRouter.get('/:device_id/history', async (req: Request, res: Response) =>
     if (!req.tenant) { res.status(401).json({ error: 'Missing tenant context' }); return; }
     const limit = parseInt(req.query.limit as string) || 50;
     const supabase = getSupabase();
-    const { data: device } = await supabase.from('devices').select('id').eq('tenant_id', req.tenant.id).eq('id', req.params.device_id).single();
+    let deviceQuery = supabase.from('devices').select('id');
+    if (req.tenant.id) {
+      deviceQuery = deviceQuery.eq('tenant_id', req.tenant.id);
+    }
+    const { data: device } = await deviceQuery.eq('id', req.params.device_id).single();
     if (!device) { res.status(404).json({ error: 'Device not found' }); return; }
-    const { data: commands, error } = await supabase.from('commands').select('*').eq('tenant_id', req.tenant.id).eq('device_id', req.params.device_id).neq('status', 'pending').order('executed_at', { ascending: false }).limit(limit);
+    let commandsQuery = supabase.from('commands').select('*');
+    if (req.tenant.id) {
+      commandsQuery = commandsQuery.eq('tenant_id', req.tenant.id);
+    }
+    const { data: commands, error } = await commandsQuery.eq('device_id', req.params.device_id).neq('status', 'pending').order('executed_at', { ascending: false }).limit(limit);
     if (error) { logger.error('Get command history:', error); res.status(500).json({ error: 'Failed to fetch command history' }); return; }
     res.json({ data: commands || [], count: (commands || []).length, statusCode: 200 });
   } catch (err) { logger.error('Get command history error:', err); res.status(500).json({ error: 'Internal server error' }); }
@@ -440,12 +535,11 @@ function mergeConfig(...layers: Partial<AgentConfig>[]): AgentConfig {
 app.get('/api/config', async (req: Request, res: Response) => {
   if (!req.tenant) { res.status(401).json({ error: 'Missing tenant context' }); return; }
   try {
-    const { data } = await getSupabase()
-      .from('device_configs')
-      .select('config')
-      .eq('tenant_id', req.tenant.id)
-      .eq('device_id', GLOBAL_CONFIG_KEY)
-      .single();
+    let query = getSupabase().from('device_configs').select('config');
+    if (req.tenant.id) {
+      query = query.eq('tenant_id', req.tenant.id);
+    }
+    const { data } = await query.eq('device_id', GLOBAL_CONFIG_KEY).single();
     const merged = mergeConfig(data?.config || {});
     res.json({ data: merged, isDefault: !data, statusCode: 200 });
   } catch {
@@ -461,7 +555,7 @@ app.put('/api/config', async (req: Request, res: Response) => {
     const { error } = await getSupabase()
       .from('device_configs')
       .upsert(
-        { tenant_id: req.tenant.id, device_id: GLOBAL_CONFIG_KEY, config, updated_at: new Date().toISOString() },
+        { tenant_id: req.tenant.id || 'null', device_id: GLOBAL_CONFIG_KEY, config, updated_at: new Date().toISOString() },
         { onConflict: 'tenant_id,device_id' }
       );
     if (error) {
@@ -478,9 +572,17 @@ app.get('/api/devices/:id/config', async (req: Request, res: Response) => {
   if (!req.tenant) { res.status(401).json({ error: 'Missing tenant context' }); return; }
   try {
     const supabase = getSupabase();
+    let globalQuery = supabase.from('device_configs').select('config');
+    if (req.tenant.id) {
+      globalQuery = globalQuery.eq('tenant_id', req.tenant.id);
+    }
+    let deviceQuery = supabase.from('device_configs').select('config');
+    if (req.tenant.id) {
+      deviceQuery = deviceQuery.eq('tenant_id', req.tenant.id);
+    }
     const [{ data: globalRow }, { data: deviceRow }] = await Promise.all([
-      supabase.from('device_configs').select('config').eq('tenant_id', req.tenant.id).eq('device_id', GLOBAL_CONFIG_KEY).single(),
-      supabase.from('device_configs').select('config').eq('tenant_id', req.tenant.id).eq('device_id', req.params.id).single(),
+      globalQuery.eq('device_id', GLOBAL_CONFIG_KEY).single(),
+      deviceQuery.eq('device_id', req.params.id).single(),
     ]);
     const merged = mergeConfig(globalRow?.config || {}, deviceRow?.config || {});
     res.json({ data: merged, globalConfig: globalRow?.config || null, deviceOverride: deviceRow?.config || null, statusCode: 200 });
@@ -497,7 +599,7 @@ app.put('/api/devices/:id/config', async (req: Request, res: Response) => {
     const { error } = await getSupabase()
       .from('device_configs')
       .upsert(
-        { tenant_id: req.tenant.id, device_id: req.params.id, config, updated_at: new Date().toISOString() },
+        { tenant_id: req.tenant.id || 'null', device_id: req.params.id, config, updated_at: new Date().toISOString() },
         { onConflict: 'tenant_id,device_id' }
       );
     if (error) {
@@ -506,7 +608,11 @@ app.put('/api/devices/:id/config', async (req: Request, res: Response) => {
       return;
     }
     // Return merged view
-    const { data: globalRow } = await getSupabase().from('device_configs').select('config').eq('tenant_id', req.tenant.id).eq('device_id', GLOBAL_CONFIG_KEY).single();
+    let globalQuery = getSupabase().from('device_configs').select('config');
+    if (req.tenant.id) {
+      globalQuery = globalQuery.eq('tenant_id', req.tenant.id);
+    }
+    const { data: globalRow } = await globalQuery.eq('device_id', GLOBAL_CONFIG_KEY).single();
     res.json({ data: mergeConfig(globalRow?.config || {}, config), deviceOverride: config, statusCode: 200 });
   } catch (err) { logger.error('PUT device config:', err); res.status(500).json({ error: 'Internal server error' }); }
 });
@@ -515,10 +621,19 @@ app.put('/api/devices/:id/config', async (req: Request, res: Response) => {
 app.delete('/api/devices/:id/config', async (req: Request, res: Response) => {
   if (!req.tenant) { res.status(401).json({ error: 'Missing tenant context' }); return; }
   try {
-    await getSupabase().from('device_configs').delete().eq('tenant_id', req.tenant.id).eq('device_id', req.params.id);
+    let deleteQuery = getSupabase().from('device_configs').delete();
+    if (req.tenant.id) {
+      deleteQuery = deleteQuery.eq('tenant_id', req.tenant.id);
+    }
+    await deleteQuery.eq('device_id', req.params.id);
     res.json({ data: null, statusCode: 200 });
   } catch (err) { logger.error('DELETE device config:', err); res.status(500).json({ error: 'Internal server error' }); }
 });
+
+// ─── Helper: Apply tenant filter if not super-admin ──────────────────────────
+function applyTenantFilter<T extends { eq: (...args: unknown[]) => T }>(query: T, tenantId: string | null): T {
+  return tenantId ? query.eq('tenant_id', tenantId) : query;
+}
 
 // ─── Alerts routes ────────────────────────────────────────────────────────────
 app.get('/api/alerts', async (req: Request, res: Response) => {
@@ -526,10 +641,13 @@ app.get('/api/alerts', async (req: Request, res: Response) => {
     if (!req.tenant) { res.status(401).json({ error: 'Missing tenant context' }); return; }
     const limit = parseInt(req.query.limit as string) || 50;
     const supabase = getSupabase();
-    const { data: alerts, error } = await supabase
+    let query = supabase
       .from('alerts')
-      .select('*')
-      .eq('tenant_id', req.tenant.id)
+      .select('*');
+    if (req.tenant.id) {
+      query = query.eq('tenant_id', req.tenant.id);
+    }
+    const { data: alerts, error } = await query
       .order('created_at', { ascending: false })
       .limit(limit);
     if (error) { logger.error('Get alerts:', error); res.status(500).json({ error: 'Failed to fetch alerts' }); return; }
@@ -541,10 +659,13 @@ app.patch('/api/alerts/:id/acknowledge', async (req: Request, res: Response) => 
   try {
     if (!req.tenant) { res.status(401).json({ error: 'Missing tenant context' }); return; }
     const supabase = getSupabase();
-    const { data: alert, error } = await supabase
+    let updateQuery = supabase
       .from('alerts')
-      .update({ acknowledged: true, updated_at: new Date().toISOString() })
-      .eq('tenant_id', req.tenant.id)
+      .update({ acknowledged: true, updated_at: new Date().toISOString() });
+    if (req.tenant.id) {
+      updateQuery = updateQuery.eq('tenant_id', req.tenant.id);
+    }
+    const { data: alert, error } = await updateQuery
       .eq('id', req.params.id)
       .select()
       .single();
@@ -561,10 +682,13 @@ app.get('/api/deploy/history', async (req: Request, res: Response) => {
     if (!req.tenant) { res.status(401).json({ error: 'Missing tenant context' }); return; }
     const limit = parseInt(req.query.limit as string) || 100;
     const supabase = getSupabase();
-    const { data: commands, error } = await supabase
+    let query = supabase
       .from('commands')
-      .select('id, device_id, command_type, params, status, output, created_at, executed_at, updated_at')
-      .eq('tenant_id', req.tenant.id)
+      .select('id, device_id, command_type, params, status, output, created_at, executed_at, updated_at');
+    if (req.tenant.id) {
+      query = query.eq('tenant_id', req.tenant.id);
+    }
+    const { data: commands, error } = await query
       .in('command_type', ['install_app', 'uninstall_app'])
       .order('created_at', { ascending: false })
       .limit(limit);
@@ -677,7 +801,11 @@ const orgsRouter = express.Router();
 orgsRouter.get('/', async (req, res) => {
   if (!req.tenant) { res.status(401).json({ error: 'Missing tenant context' }); return; }
   try {
-    const { data, error } = await getSupabase().from('organizations').select('*').eq('tenant_id', req.tenant.id).order('name');
+    let query = getSupabase().from('organizations').select('*');
+    if (req.tenant.id) {
+      query = query.eq('tenant_id', req.tenant.id);
+    }
+    const { data, error } = await query.order('name');
     if (error) throw error;
     res.json({ data: data || [], statusCode: 200 });
   } catch { res.status(500).json({ error: 'Failed to fetch organizations' }); }
@@ -687,7 +815,7 @@ orgsRouter.post('/', async (req, res) => {
   const { name, type, description, address, city, country, phone, website } = req.body as Record<string, string>;
   if (!name) { res.status(400).json({ error: 'Missing required field: name' }); return; }
   try {
-    const { data, error } = await getSupabase().from('organizations').insert({ tenant_id: req.tenant.id, name, type: type || 'company', description, address, city, country: country || 'France', phone, website, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }).select('*').single();
+    const { data, error } = await getSupabase().from('organizations').insert({ tenant_id: req.tenant.id || 'null', name, type: type || 'company', description, address, city, country: country || 'France', phone, website, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }).select('*').single();
     if (error) throw error;
     res.status(201).json({ data, statusCode: 201 });
   } catch { res.status(500).json({ error: 'Failed to create organization' }); }
@@ -695,14 +823,25 @@ orgsRouter.post('/', async (req, res) => {
 orgsRouter.patch('/:id', async (req, res) => {
   if (!req.tenant) { res.status(401).json({ error: 'Missing tenant context' }); return; }
   try {
-    const { data, error } = await getSupabase().from('organizations').update({ ...req.body as Record<string, unknown>, updated_at: new Date().toISOString() }).eq('tenant_id', req.tenant.id).eq('id', req.params.id).select('*').single();
+    let updateQuery = getSupabase().from('organizations').update({ ...req.body as Record<string, unknown>, updated_at: new Date().toISOString() });
+    if (req.tenant.id) {
+      updateQuery = updateQuery.eq('tenant_id', req.tenant.id);
+    }
+    const { data, error } = await updateQuery.eq('id', req.params.id).select('*').single();
     if (error || !data) { res.status(404).json({ error: 'Organization not found' }); return; }
     res.json({ data, statusCode: 200 });
   } catch { res.status(500).json({ error: 'Failed to update organization' }); }
 });
 orgsRouter.delete('/:id', async (req, res) => {
   if (!req.tenant) { res.status(401).json({ error: 'Missing tenant context' }); return; }
-  try { await getSupabase().from('organizations').delete().eq('tenant_id', req.tenant.id).eq('id', req.params.id); res.json({ statusCode: 200 }); }
+  try {
+    let deleteQuery = getSupabase().from('organizations').delete();
+    if (req.tenant.id) {
+      deleteQuery = deleteQuery.eq('tenant_id', req.tenant.id);
+    }
+    await deleteQuery.eq('id', req.params.id);
+    res.json({ statusCode: 200 });
+  }
   catch { res.status(500).json({ error: 'Failed to delete organization' }); }
 });
 app.use('/api/organizations', orgsRouter);
@@ -712,7 +851,11 @@ const sitesRouter = express.Router();
 sitesRouter.get('/', async (req, res) => {
   if (!req.tenant) { res.status(401).json({ error: 'Missing tenant context' }); return; }
   try {
-    const { data, error } = await getSupabase().from('sites').select('*').eq('tenant_id', req.tenant.id).order('name');
+    let query = getSupabase().from('sites').select('*');
+    if (req.tenant.id) {
+      query = query.eq('tenant_id', req.tenant.id);
+    }
+    const { data, error } = await query.order('name');
     if (error) throw error;
     res.json({ data: data || [], statusCode: 200 });
   } catch { res.status(500).json({ error: 'Failed to fetch sites' }); }
@@ -722,7 +865,7 @@ sitesRouter.post('/', async (req, res) => {
   const { name, organization_id, address, city, postal_code, country } = req.body as Record<string, string>;
   if (!name) { res.status(400).json({ error: 'Missing required field: name' }); return; }
   try {
-    const { data, error } = await getSupabase().from('sites').insert({ tenant_id: req.tenant.id, organization_id: organization_id || null, name, address, city, postal_code, country: country || 'France', created_at: new Date().toISOString(), updated_at: new Date().toISOString() }).select('*').single();
+    const { data, error } = await getSupabase().from('sites').insert({ tenant_id: req.tenant.id || 'null', organization_id: organization_id || null, name, address, city, postal_code, country: country || 'France', created_at: new Date().toISOString(), updated_at: new Date().toISOString() }).select('*').single();
     if (error) throw error;
     res.status(201).json({ data, statusCode: 201 });
   } catch { res.status(500).json({ error: 'Failed to create site' }); }
@@ -730,14 +873,25 @@ sitesRouter.post('/', async (req, res) => {
 sitesRouter.patch('/:id', async (req, res) => {
   if (!req.tenant) { res.status(401).json({ error: 'Missing tenant context' }); return; }
   try {
-    const { data, error } = await getSupabase().from('sites').update({ ...req.body as Record<string, unknown>, updated_at: new Date().toISOString() }).eq('tenant_id', req.tenant.id).eq('id', req.params.id).select('*').single();
+    let updateQuery = getSupabase().from('sites').update({ ...req.body as Record<string, unknown>, updated_at: new Date().toISOString() });
+    if (req.tenant.id) {
+      updateQuery = updateQuery.eq('tenant_id', req.tenant.id);
+    }
+    const { data, error } = await updateQuery.eq('id', req.params.id).select('*').single();
     if (error || !data) { res.status(404).json({ error: 'Site not found' }); return; }
     res.json({ data, statusCode: 200 });
   } catch { res.status(500).json({ error: 'Failed to update site' }); }
 });
 sitesRouter.delete('/:id', async (req, res) => {
   if (!req.tenant) { res.status(401).json({ error: 'Missing tenant context' }); return; }
-  try { await getSupabase().from('sites').delete().eq('tenant_id', req.tenant.id).eq('id', req.params.id); res.json({ statusCode: 200 }); }
+  try {
+    let deleteQuery = getSupabase().from('sites').delete();
+    if (req.tenant.id) {
+      deleteQuery = deleteQuery.eq('tenant_id', req.tenant.id);
+    }
+    await deleteQuery.eq('id', req.params.id);
+    res.json({ statusCode: 200 });
+  }
   catch { res.status(500).json({ error: 'Failed to delete site' }); }
 });
 app.use('/api/sites', sitesRouter);
@@ -747,7 +901,11 @@ const depsRouter = express.Router();
 depsRouter.get('/', async (req, res) => {
   if (!req.tenant) { res.status(401).json({ error: 'Missing tenant context' }); return; }
   try {
-    const { data, error } = await getSupabase().from('departments').select('*').eq('tenant_id', req.tenant.id).order('name');
+    let query = getSupabase().from('departments').select('*');
+    if (req.tenant.id) {
+      query = query.eq('tenant_id', req.tenant.id);
+    }
+    const { data, error } = await query.order('name');
     if (error) throw error;
     res.json({ data: data || [], statusCode: 200 });
   } catch { res.status(500).json({ error: 'Failed to fetch departments' }); }
@@ -757,7 +915,7 @@ depsRouter.post('/', async (req, res) => {
   const { name, organization_id, site_id, description } = req.body as Record<string, string>;
   if (!name) { res.status(400).json({ error: 'Missing required field: name' }); return; }
   try {
-    const { data, error } = await getSupabase().from('departments').insert({ tenant_id: req.tenant.id, organization_id: organization_id || null, site_id: site_id || null, name, description, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }).select('*').single();
+    const { data, error } = await getSupabase().from('departments').insert({ tenant_id: req.tenant.id || 'null', organization_id: organization_id || null, site_id: site_id || null, name, description, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }).select('*').single();
     if (error) throw error;
     res.status(201).json({ data, statusCode: 201 });
   } catch { res.status(500).json({ error: 'Failed to create department' }); }
@@ -765,14 +923,25 @@ depsRouter.post('/', async (req, res) => {
 depsRouter.patch('/:id', async (req, res) => {
   if (!req.tenant) { res.status(401).json({ error: 'Missing tenant context' }); return; }
   try {
-    const { data, error } = await getSupabase().from('departments').update({ ...req.body as Record<string, unknown>, updated_at: new Date().toISOString() }).eq('tenant_id', req.tenant.id).eq('id', req.params.id).select('*').single();
+    let updateQuery = getSupabase().from('departments').update({ ...req.body as Record<string, unknown>, updated_at: new Date().toISOString() });
+    if (req.tenant.id) {
+      updateQuery = updateQuery.eq('tenant_id', req.tenant.id);
+    }
+    const { data, error } = await updateQuery.eq('id', req.params.id).select('*').single();
     if (error || !data) { res.status(404).json({ error: 'Department not found' }); return; }
     res.json({ data, statusCode: 200 });
   } catch { res.status(500).json({ error: 'Failed to update department' }); }
 });
 depsRouter.delete('/:id', async (req, res) => {
   if (!req.tenant) { res.status(401).json({ error: 'Missing tenant context' }); return; }
-  try { await getSupabase().from('departments').delete().eq('tenant_id', req.tenant.id).eq('id', req.params.id); res.json({ statusCode: 200 }); }
+  try {
+    let deleteQuery = getSupabase().from('departments').delete();
+    if (req.tenant.id) {
+      deleteQuery = deleteQuery.eq('tenant_id', req.tenant.id);
+    }
+    await deleteQuery.eq('id', req.params.id);
+    res.json({ statusCode: 200 });
+  }
   catch { res.status(500).json({ error: 'Failed to delete department' }); }
 });
 app.use('/api/departments', depsRouter);
@@ -782,7 +951,11 @@ app.patch('/api/devices/:id/assignment', async (req: Request, res: Response) => 
   if (!req.tenant) { res.status(401).json({ error: 'Missing tenant context' }); return; }
   try {
     const { organization_id, site_id, department_id, notes } = req.body as Record<string, string | null>;
-    const { data, error } = await getSupabase().from('devices').update({ organization_id: organization_id || null, site_id: site_id || null, department_id: department_id || null, notes, updated_at: new Date().toISOString() }).eq('tenant_id', req.tenant.id).eq('id', req.params.id).select('*').single();
+    let updateQuery = getSupabase().from('devices').update({ organization_id: organization_id || null, site_id: site_id || null, department_id: department_id || null, notes, updated_at: new Date().toISOString() });
+    if (req.tenant.id) {
+      updateQuery = updateQuery.eq('tenant_id', req.tenant.id);
+    }
+    const { data, error } = await updateQuery.eq('id', req.params.id).select('*').single();
     if (error || !data) { res.status(404).json({ error: 'Device not found' }); return; }
     res.json({ data, statusCode: 200 });
   } catch (err) { logger.error('Device assignment error:', err); res.status(500).json({ error: 'Internal server error' }); }
