@@ -142,8 +142,9 @@ async function tenantMiddleware(req: Request, res: Response, next: NextFunction)
 
     // Super-admin users can see ALL tenants (no tenant isolation)
     if (isSuperAdmin) {
+      (req as unknown as Record<string, unknown>)._tenantId = null;
       req.tenant = {
-        id: null,  // null = see all tenants
+        id: 'super-admin-all-tenants',  // Placeholder ID for typing
         office365_tenant_id: undefined,
         name: 'Super-Admin (All Tenants)',
         subscription_tier: 'enterprise',
@@ -271,10 +272,11 @@ devicesRouter.get('/', async (req: Request, res: Response) => {
     const supabase = getSupabase();
     let query = supabase.from('devices').select('*');
 
-    // Super-admin (req.tenant.id === null) sees all devices
-    if (req.tenant.id) {
+    // Super-admin sees all devices
+    const isSuperAdmin = (req.tenant as unknown as Record<string, unknown>).isSuperAdmin as boolean | undefined;
+    if (!isSuperAdmin && req.tenant.id) {
       query = query.eq('tenant_id', req.tenant.id);
-    } else {
+    } else if (isSuperAdmin) {
       logger.info('Super-admin listing all devices');
     }
 
@@ -629,11 +631,6 @@ app.delete('/api/devices/:id/config', async (req: Request, res: Response) => {
     res.json({ data: null, statusCode: 200 });
   } catch (err) { logger.error('DELETE device config:', err); res.status(500).json({ error: 'Internal server error' }); }
 });
-
-// ─── Helper: Apply tenant filter if not super-admin ──────────────────────────
-function applyTenantFilter<T extends { eq: (...args: unknown[]) => T }>(query: T, tenantId: string | null): T {
-  return tenantId ? query.eq('tenant_id', tenantId) : query;
-}
 
 // ─── Alerts routes ────────────────────────────────────────────────────────────
 app.get('/api/alerts', async (req: Request, res: Response) => {
