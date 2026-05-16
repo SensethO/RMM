@@ -1,8 +1,6 @@
 import { useEffect, useState } from 'react';
 import { getApiClient } from '../api/client';
 
-const apiClient = getApiClient();
-
 interface Tenant {
   id: string;
   name: string;
@@ -41,7 +39,7 @@ export default function Tenants() {
     setLoading(true);
     setError('');
     try {
-      const resp = await apiClient.get('/api/tenants');
+      const resp = await getApiClient().get('/api/tenants');
       setTenants(resp.data.data || []);
     } catch {
       setError('Impossible de charger les tenants.');
@@ -56,7 +54,7 @@ export default function Tenants() {
     if (!newName.trim()) return;
     setCreating(true);
     try {
-      await apiClient.post('/api/tenants', {
+      await getApiClient().post('/api/tenants', {
         name: newName.trim(),
         office365_tenant_id: newO365Id.trim() || undefined,
         subscription_tier: newTier,
@@ -84,7 +82,7 @@ export default function Tenants() {
     if (!editing) return;
     setSaving(true);
     try {
-      await apiClient.patch(`/api/tenants/${editing.id}`, {
+      await getApiClient().patch(`/api/tenants/${editing.id}`, {
         name: editName.trim(),
         office365_tenant_id: editO365Id.trim() || undefined,
         subscription_tier: editTier,

@@ -1,0 +1,17 @@
+# Tout tuer d'un coup
+Get-Process powershell | Where-Object { (Get-WmiObject Win32_Process -Filter "ProcessId=$($_.Id)").CommandLine -like "*tray*" } | Stop-Process -Force
+Get-Process wscript -ErrorAction SilentlyContinue | Stop-Process -Force
+Get-Process node -ErrorAction SilentlyContinue | Stop-Process -Force
+
+
+
+Get-WmiObject Win32_Process -Filter "name='node.exe'" | ForEach-Object {
+    $parent = Get-WmiObject Win32_Process -Filter "ProcessId=$($_.ParentProcessId)" -ErrorAction SilentlyContinue
+    Write-Host "Node PID $($_.ProcessId) -> Parent: $($parent.Name) (PID $($_.ParentProcessId))" -ForegroundColor Yellow
+    Write-Host "  Cmd: $($_.CommandLine)" -ForegroundColor Gray
+    Write-Host "  Parent cmd: $($parent.CommandLine)" -ForegroundColor DarkGray
+    Write-Host ""
+}
+
+
+Get-WmiObject Win32_Service | Where-Object { $_.PathName -like "*node*" -or $_.PathName -like "*agent*" } | Select-Object Name, State, PathName

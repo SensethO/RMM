@@ -56,14 +56,28 @@ export function Login() {
         .sign(secret);
 
       console.log('✅ JWT generated:', token.substring(0, 50) + '...');
+      console.log('Full token:', token);
+      console.log('Token length:', token.length);
+
       // Store token in localStorage
+      if (!token || token.length === 0) {
+        console.error('❌ Token is empty!');
+        setError('Token generation failed');
+        setIsLoading(false);
+        return;
+      }
+
       localStorage.setItem('auth_token', token);
-      localStorage.removeItem('rmm_session_id'); // Fresh session on each login
+      const stored = localStorage.getItem('auth_token');
       console.log('✅ Token stored in localStorage');
+      console.log('Verification - Token in storage:', stored ? stored.substring(0, 50) + '...' : 'NOT FOUND');
+      localStorage.removeItem('rmm_session_id'); // Fresh session on each login
 
       // Redirect to dashboard - use hard reload so App.tsx re-reads localStorage
       console.log('🚀 Redirecting to dashboard...');
-      window.location.href = '/';
+      setTimeout(() => {
+        window.location.href = '/';
+      }, 100);
     } catch (err) {
       const errorMessage = 'Login failed. Please try again.';
       setError(errorMessage);
