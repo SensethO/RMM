@@ -57,16 +57,6 @@ app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString(), environment: process.env.NODE_ENV || 'development' });
 });
 
-// DEBUG: Check environment variables (remove in production)
-app.get('/api/debug/config', (_req, res) => {
-  res.json({
-    NODE_ENV: process.env.NODE_ENV,
-    SUPER_ADMIN_GROUP_ID: process.env.SUPER_ADMIN_GROUP_ID || 'NOT_SET',
-    JWT_SECRET: process.env.JWT_SECRET ? '***SET***' : 'NOT_SET',
-    SUPABASE_URL: process.env.SUPABASE_URL ? '***SET***' : 'NOT_SET',
-  });
-});
-
 // ─── Auth route (no middleware) ───────────────────────────────────────────────
 app.post('/api/auth/login', (req: Request, res: Response) => {
   const { username, password, tenant_id } = req.body as { username?: string; password?: string; tenant_id?: string };
@@ -92,7 +82,8 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
 // ─── Auth middleware ──────────────────────────────────────────────────────────
 // SUPER_ADMIN_GROUP_ID: Configure this to your Azure AD group GUID for RMM super-admins
 // Example: '00000000-0000-0000-0000-000000000001'
-const SUPER_ADMIN_GROUP_ID = process.env.SUPER_ADMIN_GROUP_ID || '';
+// For testing: default to mock group ID if env var not set. Use real group ID in production.
+const SUPER_ADMIN_GROUP_ID = process.env.SUPER_ADMIN_GROUP_ID || '8b84b1f8-43cb-41d5-bd37-9530b0f1c0ff';
 logger.info(`[STARTUP] SUPER_ADMIN_GROUP_ID configured: ${SUPER_ADMIN_GROUP_ID ? 'YES (' + SUPER_ADMIN_GROUP_ID + ')' : 'NO - super-admin disabled'}`);
 
 function authMiddleware(req: Request, res: Response, next: NextFunction): void {
@@ -208,7 +199,7 @@ async function tenantMiddleware(req: Request, res: Response, next: NextFunction)
   }
 }
 
-// Apply auth + tenant to all /api/ routes (except /api/auth, /api/health, /api/sessions)
+// Apply auth + tenant to all /api/ routes (except /api/auth, /api/health, /api/debug, /api/sessions)
 // /api/tenants only requires auth (no tenant isolation — it's a cross-tenant admin resource)
 app.use('/api/', (req, res, next) => {
   if (req.path.startsWith('/auth') || req.path === '/health' || req.path.startsWith('/system') || req.path.startsWith('/sessions')) return next();
