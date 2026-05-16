@@ -83,6 +83,7 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
 // SUPER_ADMIN_GROUP_ID: Configure this to your Azure AD group GUID for RMM super-admins
 // Example: '00000000-0000-0000-0000-000000000001'
 const SUPER_ADMIN_GROUP_ID = process.env.SUPER_ADMIN_GROUP_ID || '';
+logger.info(`[STARTUP] SUPER_ADMIN_GROUP_ID configured: ${SUPER_ADMIN_GROUP_ID ? 'YES (' + SUPER_ADMIN_GROUP_ID + ')' : 'NO - super-admin disabled'}`);
 
 function authMiddleware(req: Request, res: Response, next: NextFunction): void {
   try {
