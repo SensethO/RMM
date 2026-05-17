@@ -18,7 +18,7 @@ const execSync = (cmd, opts = {}) => _execSync(cmd, { ...opts, windowsHide: true
 // ─── Log file + PID (pour la tray icon) ──────────────────────────────────────
 const _fs   = require('fs');
 const _path = require('path');
-const RMM_DATA_DIR = _path.join(process.env.ProgramData || 'C:\\ProgramData', 'RMM');
+const RMM_DATA_DIR = _path.join(process.env.APPDATA || _path.join(os.homedir(), 'AppData', 'Roaming'), 'RMM');
 const RMM_LOG_FILE = _path.join(RMM_DATA_DIR, 'agent.log');
 const RMM_PID_FILE = _path.join(RMM_DATA_DIR, 'agent.pid');
 ;(function initLogger() {
