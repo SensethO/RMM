@@ -18,7 +18,7 @@ const execSync = (cmd, opts = {}) => _execSync(cmd, { ...opts, windowsHide: true
 // ─── Log file + PID (pour la tray icon) ──────────────────────────────────────
 const _fs   = require('fs');
 const _path = require('path');
-const RMM_DATA_DIR = _path.join(process.env.ProgramData || 'C:\\ProgramData', 'RMM');
+const RMM_DATA_DIR = _path.join(process.env.APPDATA || _path.join(os.homedir(), 'AppData', 'Roaming'), 'RMM');
 const RMM_LOG_FILE = _path.join(RMM_DATA_DIR, 'agent.log');
 const RMM_PID_FILE = _path.join(RMM_DATA_DIR, 'agent.pid');
 ;(function initLogger() {
@@ -42,7 +42,7 @@ const RMM_PID_FILE = _path.join(RMM_DATA_DIR, 'agent.pid');
 
 // ─── Configuration ────────────────────────────────────────────────────────────
 const CONFIG = {
-  backend:   'https://backend-xi-one-36.vercel.app',
+  backend:   'https://backend-5gn327wz6-sensethos-projects.vercel.app',
   username:  'admin',
   password:  'demo123',
   tenant_id: '', // Laisser vide → tenant démo | Renseigner l'UUID Supabase du tenant client
