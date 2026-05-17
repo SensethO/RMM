@@ -5,7 +5,7 @@
  * Usage: node agent.js
  */
 
-const AGENT_VERSION = '1.1.0';
+const AGENT_VERSION = '1.1.5';
 const AGENT_RAW_URL = 'https://raw.githubusercontent.com/SensethO/RMM/master/agent-windows/agent.js';
 
 const https = require('https');
@@ -18,12 +18,13 @@ const execSync = (cmd, opts = {}) => _execSync(cmd, { ...opts, windowsHide: true
 // ─── Log file + PID (pour la tray icon) ──────────────────────────────────────
 const _fs   = require('fs');
 const _path = require('path');
-const RMM_DATA_DIR = _path.join(process.env.APPDATA || _path.join(os.homedir(), 'AppData', 'Roaming'), 'RMM');
+const RMM_DATA_DIR = _path.join(process.env.ProgramData || 'C:\\ProgramData', 'RMM');
 const RMM_LOG_FILE = _path.join(RMM_DATA_DIR, 'agent.log');
 const RMM_PID_FILE = _path.join(RMM_DATA_DIR, 'agent.pid');
 ;(function initLogger() {
   try {
     if (!_fs.existsSync(RMM_DATA_DIR)) _fs.mkdirSync(RMM_DATA_DIR, { recursive: true });
+    // Rotation si > 2 Mo
     try { if (_fs.existsSync(RMM_LOG_FILE) && _fs.statSync(RMM_LOG_FILE).size > 2e6) _fs.renameSync(RMM_LOG_FILE, RMM_LOG_FILE + '.old'); } catch {}
     const _stream = _fs.createWriteStream(RMM_LOG_FILE, { flags: 'a' });
     const _ts  = () => new Date().toLocaleString('fr-FR');
@@ -34,6 +35,7 @@ const RMM_PID_FILE = _path.join(RMM_DATA_DIR, 'agent.pid');
     console.log   = (...a) => { _L(...a);  _stream.write(`[${_ts()}] INFO  ${_fmt(...a)}\n`); };
     console.error = (...a) => { _E(...a);  _stream.write(`[${_ts()}] ERROR ${_fmt(...a)}\n`); };
     console.warn  = (...a) => { _W(...a);  _stream.write(`[${_ts()}] WARN  ${_fmt(...a)}\n`); };
+    // Écrire le PID pour que tray.ps1 puisse gérer le processus
     _fs.writeFileSync(RMM_PID_FILE, String(process.pid));
   } catch {}
 })();
@@ -43,7 +45,7 @@ const CONFIG = {
   backend:   'https://backend-5gn327wz6-sensethos-projects.vercel.app',
   username:  'admin',
   password:  'demo123',
-  tenant_id: '045edce4-dacf-4d85-a27c-46b1608e0282', // SCDB PRO SARL
+  tenant_id: '', // Laisser vide → tenant démo | Renseigner l'UUID Supabase du tenant client
 };
 
 // Paramètres actifs (mis à jour depuis le backend)
@@ -121,14 +123,14 @@ async function getCpuPercent() {
   return Math.round((1 - idleDiff / totalDiff) * 100);
 }
 
-// ─── RAM usage ────────────────────────────────────────────────────────────────
+// ─── RAM usage ──────────────────────────────��─────────────────────────────────
 function getRamPercent() {
   const total = os.totalmem();
   const free  = os.freemem();
   return Math.round(((total - free) / total) * 100);
 }
 
-// ─── Public IP ───────────────────────────────────────────────────────────────
+// ─── Public IP ──────────────────────────────────────────────────�����������────────────
 function fetchPublicIp() {
   return new Promise((resolve) => {
     https.get('https://api.ipify.org?format=json', (res) => {
@@ -196,7 +198,7 @@ function getDeviceId() {
   return `WIN-${hostname.toUpperCase()}-${mac}`.substring(0, 50);
 }
 
-// ─── Fetch config from backend ────────────────────────────────────────────────
+// ─── Fetch config from backend ───────────────────���─���─���─���─���────────────────────
 async function fetchConfig(silent = false) {
   try {
     const res = await request('GET', `/api/devices/${deviceDbId}/config`, null);
@@ -343,7 +345,7 @@ async function sendTelemetry() {
   });
 }
 
-// ─── Heartbeat léger (appelé avant les commandes longues) ────────────────────
+// ─── Heartbeat léger (appelé avant les commandes longues) ─────────���──────────
 async function sendHeartbeat() {
   try {
     await request('PATCH', `/api/devices/${deviceDbId}`, {
@@ -610,11 +612,657 @@ async function executeCommand(type, params) {
 
       // Écrire la nouvelle version
       fs.writeFileSync(selfPath, content, 'utf8');
-      // Lancer la nouvelle version en arrière-plan puis quitter
-      const { spawn } = require('child_process');
-      spawn(process.execPath, [selfPath], { detached: true, stdio: 'inherit' }).unref();
-      setTimeout(() => process.exit(0), 500);
+
+      // Écrire un .bat de relance dans le même dossier — survit à la sortie du process
+      // même en contexte tâche planifiée / SYSTEM
+      const dir     = path.dirname(selfPath);
+      const batPath = path.join(dir, 'rmm-restart.bat');
+      const nodeExe = process.execPath.replace(/\\/g, '\\\\');
+      const agentJs = selfPath.replace(/\\/g, '\\\\');
+      fs.writeFileSync(batPath, [
+        '@echo off',
+        'timeout /t 2 /nobreak >nul',
+        `start "" /b "${process.execPath}" "${selfPath}"`,
+        'del "%~f0"',   // supprime ce .bat après exécution
+      ].join('\r\n'), 'utf8');
+
+      // Lancer le .bat en arrière-plan (cmd.exe, détaché, sans fenêtre)
+      const { exec: execRestart, spawn: spawnRestart } = require('child_process');
+      execRestart(`start "" /b cmd.exe /c "${batPath}"`, { shell: 'cmd.exe', windowsHide: true });
+      // Fallback : spawn direct si start échoue
+      setTimeout(() => {
+        try {
+          spawnRestart(process.execPath, [selfPath], { detached: true, stdio: 'ignore' }).unref();
+        } catch {}
+        process.exit(0);
+      }, 2000);
       return `✅ Mise à jour téléchargée (${content.length} octets). Redémarrage en cours...`;
+    }
+
+    // ─── Déploiement logiciels ────────────────────────────────────────────────
+    case 'install_app': {
+      await sendHeartbeat(); // évite le passage offline pendant l'installation
+      const machineArch = os.arch(); // 'x64', 'arm64', 'ia32'...
+      const isARM64     = machineArch === 'arm64';
+
+      // Packages dont l'ID x64 doit être tenté en ARM64 natif si dispo dans winget
+      // null = pas d'ID séparé → on tente --architecture arm64 sur le même ID, fallback x64
+      const ARM64_ID_MAP = {
+        'Adobe.Acrobat.Reader.64-bit': null,
+        'Google.Chrome':               null,
+        'Mozilla.Firefox':             null,
+        'Microsoft.VisualStudioCode':  null,
+        'Slack.Slack':                 null,
+        'SlackTechnologies.Slack':     null,
+        // Apps IA — supportent ARM64 nativement
+        'Anthropic.Claude':            null,
+        'Perplexity.Perplexity':       null,
+        'Ollama.Ollama':               null,
+        '9NTM2QC6QWS7':               null, // ChatGPT (Microsoft Store)
+        '9NHT9RB2F4HD':               null, // Microsoft Copilot (Microsoft Store)
+      };
+
+      const method      = params.method || 'winget';
+      const packageId   = params.package_id;
+      const installUrl  = params.url;
+      const installArgs = params.install_args;
+      const displayName = params.display_name || packageId || installUrl || 'Application';
+
+      // ── ADWCleaner : portable, téléchargement direct (winget hash instable) ──
+      if (packageId === 'Malwarebytes.AdwCleaner' && method === 'winget') {
+        const fs   = require('fs');
+        const path = require('path');
+        const adwDir  = 'C:\\AdwCleaner';
+        const adwPath = path.join(adwDir, 'adwcleaner.exe');
+        if (!fs.existsSync(adwDir)) fs.mkdirSync(adwDir, { recursive: true });
+        const adwUrl = 'https://adwcleaner.malwarebytes.com/adwcleaner?channel=release';
+        console.log(`   📥 ADWCleaner: téléchargement direct depuis Malwarebytes...`);
+
+        // Helper téléchargement avec suivi de redirects
+        const downloadAdw = (url, left = 8) => new Promise((resolve, reject) => {
+          const mod = url.startsWith('https') ? https : http;
+          mod.get(url, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' } }, res => {
+            if ([301,302,303,307,308].includes(res.statusCode) && res.headers.location && left > 0) {
+              res.resume();
+              downloadAdw(res.headers.location, left - 1).then(resolve).catch(reject);
+            } else if (res.statusCode === 200) {
+              const chunks = [];
+              res.on('data', c => chunks.push(c));
+              res.on('end', () => resolve(Buffer.concat(chunks)));
+              res.on('error', reject);
+            } else {
+              reject(new Error(`HTTP ${res.statusCode}`));
+            }
+          }).on('error', reject);
+        });
+
+        const buf = await downloadAdw(adwUrl);
+        fs.writeFileSync(adwPath, buf);
+        const sizeMb = (buf.length / 1024 / 1024).toFixed(1);
+        console.log(`   ✅ ADWCleaner ${sizeMb} MB → ${adwPath}`);
+        return `✅ ADWCleaner installé (portable).\n📁 Chemin : ${adwPath}\n💾 Taille : ${sizeMb} MB\n\nPrêt pour adwcleaner_scan, adwcleaner_clean et adwcleaner_purge.`;
+      }
+
+      if (method === 'winget') {
+        if (!packageId) throw new Error('Parametre manquant : package_id');
+
+        // ── Résolution ARM64 ─────────────────────────���───────────────────
+        let effectivePackageId = packageId;
+        let archNote = '';
+
+        if (isARM64 && packageId in ARM64_ID_MAP && ARM64_ID_MAP[packageId]) {
+          effectivePackageId = ARM64_ID_MAP[packageId];
+          archNote = ` [ARM64 natif — ID: ${effectivePackageId}]`;
+        }
+
+        console.log(`   📦 winget install ${effectivePackageId}${isARM64 ? ' [machine ARM64]' : ''}...`);
+
+        const baseFlags = `--silent --accept-package-agreements --accept-source-agreements --disable-interactivity`;
+        let installOutput = '';
+        let installedNatively = false;
+
+        // ── Tentative ARM64 native (si machine ARM64 et pas déjà d'ID spécifique) ──
+        if (isARM64 && !archNote) {
+          const arm64Cmd = `winget install --id "${effectivePackageId}" --architecture arm64 ${baseFlags}`;
+          try {
+            installOutput = execSync(arm64Cmd, { encoding: 'utf8', timeout: 300_000, shell: 'cmd.exe' });
+            installedNatively = true;
+            archNote = ` [ARM64 natif ✅]`;
+            console.log(`   ✅ Installé en natif ARM64`);
+          } catch (arm64Err) {
+            const arm64Out = (arm64Err.stdout || arm64Err.message || '').toLowerCase();
+            const alreadyOk = arm64Out.includes('already installed') ||
+                              arm64Out.includes('successfully installed') ||
+                              arm64Out.includes('déjà installé');
+            if (alreadyOk) {
+              installOutput = arm64Err.stdout || arm64Err.message || '';
+              installedNatively = true;
+              archNote = ` [ARM64 natif ✅]`;
+            } else {
+              // ARM64 non dispo pour ce paquet → fallback x64 émulé
+              console.log(`   ℹ️  ARM64 non disponible pour ${effectivePackageId}, bascule x64 émulé...`);
+              archNote = ` [x64 émulé sur ARM64 ⚠️]`;
+            }
+          }
+        }
+
+        // ── Installation standard (x64 ou si ARM64 déjà fait) ────────────
+        if (!installedNatively) {
+          const cmd = `winget install --id "${effectivePackageId}" ${baseFlags}`;
+          try {
+            installOutput = execSync(cmd, { encoding: 'utf8', timeout: 300_000, shell: 'cmd.exe' });
+          } catch (installErr) {
+            installOutput = installErr.stdout || installErr.message || '';
+            if (!installOutput.toLowerCase().includes('successfully installed') &&
+                !installOutput.toLowerCase().includes('already installed') &&
+                !installOutput.toLowerCase().includes('déjà installé') &&
+                !installOutput.toLowerCase().includes('no applicable upgrade found')) {
+              throw new Error(`Installation échouée.${archNote}\n${installOutput.trim()}`);
+            }
+          }
+        }
+
+        // ── Vérification post-installation ──────────────────────────────
+        let verifyLine = '';
+        try {
+          const checkOut = execSync(`winget list --id "${effectivePackageId}" --accept-source-agreements 2>nul`, {
+            encoding: 'utf8', timeout: 15_000, shell: 'cmd.exe',
+          });
+          const lines = checkOut.split('\n').filter(l => l.toLowerCase().includes(effectivePackageId.toLowerCase()));
+          if (lines.length > 0) {
+            verifyLine = `✅ VÉRIFIÉ installé : ${lines[0].trim()}`;
+          } else {
+            verifyLine = `⚠️ Non trouvé dans winget list après installation (peut être normal)`;
+          }
+        } catch {
+          verifyLine = '⚠️ Vérification winget list indisponible';
+        }
+
+        const archSummary = isARM64
+          ? `\n--- Architecture ---\nMachine: ${machineArch.toUpperCase()}${archNote}\n`
+          : '';
+        return `✅ ${displayName} installé.${archNote}\n${archSummary}\n--- Vérification ---\n${verifyLine}\n\n--- Output winget ---\n${installOutput.trim()}`;
+      }
+
+      if (method === 'url') {
+        if (!installUrl) throw new Error('Paramètre manquant : url');
+        const fs   = require('fs');
+        const path = require('path');
+        // Détecter l'extension depuis l'URL
+        const cleanUrl = installUrl.split('?')[0];
+        const ext = cleanUrl.toLowerCase().endsWith('.msi') ? '.msi' : '.exe';
+        const tmpFile = path.join(os.tmpdir(), `rmm-install-${Date.now()}${ext}`);
+
+        console.log(`   📥 Téléchargement : ${installUrl}`);
+        await new Promise((resolve, reject) => {
+          const urlObj = new URL(installUrl);
+          const driver = urlObj.protocol === 'https:' ? require('https') : require('http');
+          const file   = fs.createWriteStream(tmpFile);
+          driver.get(installUrl, res => {
+            if (res.statusCode !== 200) { file.close(); return reject(new Error(`HTTP ${res.statusCode}`)); }
+            res.pipe(file);
+            file.on('finish', () => { file.close(); resolve(); });
+          }).on('error', err => { try { file.close(); fs.unlinkSync(tmpFile); } catch {} reject(err); });
+        });
+
+        console.log(`   ▶ Installation de ${tmpFile}...`);
+        const args = installArgs || (ext === '.msi' ? '/qn /norestart' : '/S');
+        const installCmd = ext === '.msi'
+          ? `msiexec /i "${tmpFile}" ${args}`
+          : `"${tmpFile}" ${args}`;
+        const result = execSync(installCmd, { encoding: 'utf8', timeout: 300_000, shell: 'cmd.exe' });
+        try { fs.unlinkSync(tmpFile); } catch {}
+        return `✅ ${displayName} installé depuis URL.\n${result.trim()}`;
+      }
+
+      throw new Error(`Méthode inconnue : ${method} (valeurs : winget, url)`);
+    }
+
+    case 'uninstall_app': {
+      const method      = params.method || 'winget';
+      const packageId   = params.package_id;
+      const displayName = params.display_name || packageId || 'Application';
+
+      if (method === 'winget') {
+        if (!packageId) throw new Error('Paramètre manquant : package_id');
+        console.log(`   🗑 winget uninstall ${packageId}...`);
+        const cmd = `winget uninstall --id "${packageId}" --silent --disable-interactivity`;
+        const result = execSync(cmd, { encoding: 'utf8', timeout: 120_000, shell: 'cmd.exe' });
+        return `✅ ${displayName} désinstallé.\n${result.trim()}`;
+      }
+      throw new Error(`Méthode inconnue : ${method}`);
+    }
+
+    case 'check_app': {
+      const packageId   = params.package_id;
+      const displayName = params.display_name || packageId;
+      if (!packageId) throw new Error('Paramètre manquant : package_id');
+      console.log(`   🔍 Vérification de ${packageId}...`);
+
+      // 1. winget list --id
+      let wingetResult = '';
+      let installed = false;
+      try {
+        const out = execSync(`winget list --id "${packageId}" --accept-source-agreements 2>nul`, {
+          encoding: 'utf8', timeout: 15_000, shell: 'cmd.exe',
+        });
+        const lines = out.split('\n').filter(l => l.toLowerCase().includes(packageId.toLowerCase()));
+        if (lines.length > 0) {
+          installed = true;
+          wingetResult = lines[0].trim();
+        }
+      } catch {}
+
+      // 2. Registre Windows (fallback)
+      let regResult = '';
+      if (!installed) {
+        try {
+          const regKeys = [
+            `HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall`,
+            `HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall`,
+            `HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall`,
+          ];
+          for (const key of regKeys) {
+            try {
+              const out = execSync(
+                `reg query "${key}" /s /f "${displayName}" /d 2>nul`,
+                { encoding: 'utf8', timeout: 10_000, shell: 'cmd.exe' }
+              );
+              if (out.trim()) { regResult = out.split('\n')[0].trim(); installed = true; break; }
+            } catch {}
+          }
+        } catch {}
+      }
+
+      if (installed) {
+        return `✅ ${displayName} est INSTALLÉ sur cette machine.\n\nwinget: ${wingetResult || '(trouvé via registre)'}\nRegistre: ${regResult || '(trouvé via winget)'}`;
+      } else {
+        return `❌ ${displayName} n'est PAS installé sur cette machine (ni winget list, ni registre).`;
+      }
+    }
+
+    case 'list_installed_apps': {
+      console.log('   📋 Récupération des applications installées...');
+
+      // ── Approche 1 : PowerShell -EncodedCommand (UTF-16LE Base64, pas d'échappement)
+      // On force l'encodage UTF-8 sur stdout pour que Node.js décode correctement
+      const psCode = [
+        // Force PowerShell à envoyer du UTF-8 sur stdout (sinon CP850/CP1252 → Node.js garble)
+        '$OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)',
+        '$ErrorActionPreference = "SilentlyContinue"',
+        '$seen = @{}',
+        '$apps = [System.Collections.Generic.List[PSCustomObject]]::new()',
+        '$paths = @(',
+        '  "HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*"',
+        '  "HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*"',
+        '  "HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*"',
+        ')',
+        'foreach ($path in $paths) {',
+        '  try {',
+        '    $items = Get-ItemProperty $path -ErrorAction SilentlyContinue',
+        '    if (-not $items) { continue }',
+        '    foreach ($item in @($items)) {',
+        '      $n = ("$($item.DisplayName)").Trim()',
+        '      if (-not $n -or $seen.ContainsKey($n)) { continue }',
+        '      $seen[$n] = 1',
+        '      $apps.Add([PSCustomObject]@{',
+        '        name         = $n',
+        '        version      = ("$($item.DisplayVersion)").Trim()',
+        '        publisher    = ("$($item.Publisher)").Trim()',
+        '        install_date = ("$($item.InstallDate)").Trim()',
+        '      })',
+        '    }',
+        '  } catch {}',
+        '}',
+        'if ($apps.Count -gt 0) {',
+        '  ($apps | Sort-Object name) | ConvertTo-Json -Compress -Depth 2',
+        '} else {',
+        '  Write-Output "[]"',
+        '}',
+      ].join('\n');
+
+      // Encoder en UTF-16LE puis Base64 (format attendu par powershell -EncodedCommand)
+      const encoded = Buffer.from(psCode, 'utf16le').toString('base64');
+
+      try {
+        const out = execSync(
+          `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ${encoded}`,
+          { encoding: 'utf8', timeout: 60_000 }
+        );
+        // Extraire la première ligne JSON valide (ignore les warnings éventuels)
+        const lines = out.split('\n').map(l => l.trim()).filter(Boolean);
+        let json = '';
+        for (const line of lines) {
+          if (line.startsWith('[') || line.startsWith('{')) { json = line; break; }
+        }
+        if (!json) throw new Error('No JSON in PS output: ' + out.substring(0, 200));
+        const parsed = JSON.parse(json);
+        const arr = Array.isArray(parsed) ? parsed : [parsed];
+        console.log(`   ✅ ${arr.length} applications trouvées (PowerShell)`);
+        return JSON.stringify(arr);
+      } catch (psErr) {
+        const psMsg = ((psErr.stdout || '') + ' ' + (psErr.stderr || '') + ' ' + (psErr.message || '')).substring(0, 200);
+        console.log('   ⚠️  PowerShell échoué, bascule sur reg query :', psMsg);
+      }
+
+      // ── Approche 2 : reg query en cmd.exe (pas de PowerShell, encodage simple)
+      try {
+        const regPaths = [
+          'HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall',
+          'HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall',
+          'HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall',
+        ];
+        const apps = [];
+        const seen = new Set();
+        for (const regPath of regPaths) {
+          try {
+            // /s = récursif, /v DisplayName = valeur ciblée, /f "" = tous les sous-clés
+            const regOut = execSync(
+              `reg query "${regPath}" /s /v DisplayName 2>nul`,
+              { encoding: 'utf8', timeout: 30_000, shell: 'cmd.exe' }
+            );
+            for (const line of regOut.split('\n')) {
+              const m = line.match(/DisplayName\s+REG_SZ\s+(.+)/i);
+              if (m) {
+                const name = m[1].trim();
+                if (name && !seen.has(name)) {
+                  seen.add(name);
+                  apps.push({ name, version: '', publisher: '', install_date: '' });
+                }
+              }
+            }
+          } catch { /* clé absente ou accès refusé, on continue */ }
+        }
+        apps.sort((a, b) => a.name.localeCompare(b.name));
+        console.log(`   ✅ ${apps.length} apps via reg query`);
+        return JSON.stringify(apps);
+      } catch (regErr) {
+        const errMsg = (regErr.message || 'reg query failed').substring(0, 200);
+        console.log('   ❌ reg query échoué :', errMsg);
+        return JSON.stringify([{ name: '[ERREUR] ' + errMsg, version: '', publisher: '', install_date: '' }]);
+      }
+    }
+
+    // ─── ADWCleaner ──────────────────────────────────────────────────────────
+    case 'adwcleaner_scan':
+    case 'adwcleaner_clean':
+    case 'adwcleaner_purge': {
+      await sendHeartbeat(); // évite le passage offline pendant l'opération longue
+      const fs   = require('fs');
+      const path = require('path');
+
+      // ── Trouver l'exécutable ADWCleaner ────────────────────────────────
+      const adwPaths = [
+        'C:\\Program Files\\Malwarebytes\\AdwCleaner\\adwcleaner.exe',
+        'C:\\Program Files (x86)\\Malwarebytes\\AdwCleaner\\adwcleaner.exe',
+        'C:\\AdwCleaner\\adwcleaner.exe',
+      ];
+      let adwExe = null;
+      for (const p of adwPaths) { if (fs.existsSync(p)) { adwExe = p; break; } }
+      if (!adwExe) {
+        try {
+          const w = execSync('where adwcleaner.exe 2>nul', { encoding: 'utf8', timeout: 3000, shell: 'cmd.exe' });
+          const found = w.trim().split('\n')[0]?.trim();
+          if (found && fs.existsSync(found)) adwExe = found;
+        } catch {}
+      }
+      if (!adwExe) {
+        throw new Error('ADWCleaner non trouvé. Installez-le via "Déploiements" > Malwarebytes.AdwCleaner.');
+      }
+
+      // ── PURGE ────────────────────────────────────────────────────────────
+      if (type === 'adwcleaner_purge') {
+        console.log('   🗑  Purge de la quarantaine ADWCleaner...');
+        const purgeLines = [];
+        purgeLines.push('AdwCleaner - Purge Quarantaine');
+        purgeLines.push('================================');
+        purgeLines.push(`Exécution : ${new Date().toLocaleString('fr-FR')}`);
+        purgeLines.push('');
+        purgeLines.push(`Exécutable : ${adwExe}`);
+        purgeLines.push('');
+        purgeLines.push('> Vidage de la quarantaine en cours...');
+        const psPurge = `Start-Process -FilePath "${adwExe}" -ArgumentList "/eula","/quarantine","purge" -WindowStyle Hidden -Wait`;
+        const encPurge = Buffer.from(psPurge, 'utf16le').toString('base64');
+        try {
+          execSync(`powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ${encPurge}`, { timeout: 60_000 });
+          purgeLines.push('> Commande ADWCleaner exécutée avec succès.');
+        } catch (e) {
+          purgeLines.push(`> Note : ${e.message}`);
+        }
+        // Fallback : supprimer manuellement le dossier quarantaine
+        const qDir = 'C:\\AdwCleaner\\Quarantine';
+        if (fs.existsSync(qDir)) {
+          try {
+            execSync(`rd /s /q "${qDir}" 2>nul`, { timeout: 10_000, shell: 'cmd.exe' });
+            purgeLines.push('> Dossier quarantaine supprimé manuellement.');
+          } catch {}
+        }
+        purgeLines.push('');
+        purgeLines.push('✅ Quarantaine vidée définitivement.');
+        return JSON.stringify({
+          action:         'purge',
+          date:           new Date().toISOString(),
+          message:        '✅ Quarantaine vidée définitivement.',
+          console_output: purgeLines.join('\n'),
+        });
+      }
+
+      // ── Fonction de parsing du log ADWCleaner ────────────────────────────
+      function parseAdwLog(content) {
+        const threats = [];
+        // Chaque section : ***** [ Catégorie ] *****
+        const sectionRe = /\*{5}\s*\[\s*([^\]]+?)\s*\]\s*\*{5}([\s\S]*?)(?=\*{5}\s*\[|#{5,}|$)/g;
+        let m;
+        while ((m = sectionRe.exec(content)) !== null) {
+          const category = m[1].trim();
+          for (const line of m[2].split('\n')) {
+            const t = line.trim();
+            if (!t || /^No\s/i.test(t) || t.startsWith('#')) continue;
+            // Format : "Threat.Type  /chemin/ou/clé"
+            const parts = t.match(/^([\w.\/-]+)\s{2,}(.+)$/);
+            if (parts) {
+              threats.push({ type: parts[1].trim(), category, path: parts[2].trim(), status: 'found' });
+            }
+          }
+        }
+        return threats;
+      }
+
+      // ── Trouver le dernier log ADWCleaner ────────────────────────────────
+      function findLatestLog(prefix) {
+        const logDir = 'C:\\AdwCleaner\\Logs';
+        if (!fs.existsSync(logDir)) return null;
+        const re = new RegExp(`AdwCleaner\\[${prefix}\\d+\\]\\.txt`, 'i');
+        const logs = fs.readdirSync(logDir).filter(f => re.test(f)).sort().reverse();
+        return logs[0] ? path.join(logDir, logs[0]) : null;
+      }
+
+      function readLog(logFile) {
+        // ADWCleaner écrit en UTF-16LE ou UTF-8 selon la version
+        try { return fs.readFileSync(logFile, 'utf16le'); } catch {}
+        try { return fs.readFileSync(logFile, 'utf8');    } catch {}
+        return '';
+      }
+
+      // ── CLEAN (quarantaine) ───────────────────────────────────────────────
+      if (type === 'adwcleaner_clean') {
+        console.log('   🔒 Mise en quarantaine des menaces...');
+        const cleanLines = [];
+        cleanLines.push('AdwCleaner - Mise en Quarantaine');
+        cleanLines.push('=================================');
+        cleanLines.push(`Exécution : ${new Date().toLocaleString('fr-FR')}`);
+        cleanLines.push('');
+        cleanLines.push(`Exécutable : ${adwExe}`);
+        cleanLines.push('');
+        cleanLines.push('> Mise en quarantaine des menaces détectées...');
+        const psClean = `Start-Process -FilePath "${adwExe}" -ArgumentList "/eula","/clean","/noreboot" -WindowStyle Hidden -Wait`;
+        const encClean = Buffer.from(psClean, 'utf16le').toString('base64');
+        try {
+          execSync(`powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ${encClean}`, { timeout: 180_000 });
+          cleanLines.push('> Commande ADWCleaner exécutée.');
+        } catch (e) {
+          cleanLines.push(`> Note : ${e.message}`);
+        }
+        const cleanLog = findLatestLog('C');
+        let quarantined = 0;
+        if (cleanLog) {
+          const content = readLog(cleanLog);
+          quarantined = parseAdwLog(content).length;
+          cleanLines.push('');
+          cleanLines.push(`> Log : ${cleanLog}`);
+          cleanLines.push(`> Éléments mis en quarantaine : ${quarantined}`);
+        } else {
+          cleanLines.push('> Log de nettoyage non trouvé.');
+        }
+        cleanLines.push('');
+        cleanLines.push(`✅ ${quarantined} élément(s) mis en quarantaine.`);
+        console.log(`   ✅ Quarantaine : ${quarantined} élément(s)`);
+        return JSON.stringify({
+          action:         'clean',
+          date:           new Date().toISOString(),
+          quarantined,
+          message:        `✅ ${quarantined} élément(s) mis en quarantaine.`,
+          log_path:       cleanLog || null,
+          console_output: cleanLines.join('\n'),
+        });
+      }
+
+      // ── SCAN ─────────────────────────────────────────────────────────────
+      console.log('   🔍 Lancement du scan ADWCleaner (1-2 min)...');
+      const scanLines = [];
+      scanLines.push('AdwCleaner - Rapport de Scan');
+      scanLines.push('=============================');
+      scanLines.push(`Démarrage : ${new Date().toLocaleString('fr-FR')}`);
+      scanLines.push('');
+      scanLines.push(`Exécutable : ${adwExe}`);
+      scanLines.push('');
+      scanLines.push('> Scan en cours (1-2 minutes)...');
+      const psScan = `Start-Process -FilePath "${adwExe}" -ArgumentList "/eula","/scan","/noreboot" -WindowStyle Hidden -Wait`;
+      const encScan = Buffer.from(psScan, 'utf16le').toString('base64');
+      try {
+        execSync(`powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ${encScan}`, { timeout: 180_000 });
+        scanLines.push('> Scan terminé.');
+      } catch (e) {
+        scanLines.push(`> Note : ${e.message}`);
+      }
+
+      // Chercher le log de scan [S##]
+      let scanLog = findLatestLog('S');
+      // Fallback : log dans le dossier racine AdwCleaner (anciennes versions)
+      if (!scanLog) {
+        const alt = 'C:\\AdwCleaner\\AdwCleaner[S00].txt';
+        if (fs.existsSync(alt)) scanLog = alt;
+      }
+      if (!scanLog) throw new Error('Log de scan ADWCleaner introuvable. Le scan a peut-être échoué.');
+
+      const content   = readLog(scanLog);
+      const threats   = parseAdwLog(content);
+      const verMatch  = content.match(/AdwCleaner\s+([\d.]+)/);
+      const dbMatch   = content.match(/Database:\s+(\S+)/);
+
+      scanLines.push('');
+      scanLines.push(`> Log : ${scanLog}`);
+      scanLines.push(`> Version ADWCleaner : ${verMatch?.[1] || 'inconnue'}`);
+      scanLines.push(`> Base de données : ${dbMatch?.[1] || 'inconnue'}`);
+      scanLines.push('');
+      if (threats.length === 0) {
+        scanLines.push('✅ Aucune menace détectée. Système sain.');
+      } else {
+        scanLines.push(`⚠️  ${threats.length} menace(s) détectée(s) :`);
+        for (const t of threats) {
+          scanLines.push(`   [${t.category}] ${t.type}  →  ${t.path}`);
+        }
+      }
+      scanLines.push('');
+      scanLines.push(`Fin du scan : ${new Date().toLocaleString('fr-FR')}`);
+
+      const result = {
+        scan_date:      new Date().toISOString(),
+        version:        verMatch?.[1] || 'unknown',
+        database:       dbMatch?.[1]  || '',
+        threats_count:  threats.length,
+        clean:          threats.length === 0,
+        threats,
+        log_path:       scanLog,
+        console_output: scanLines.join('\n'),
+      };
+      console.log(`   ✅ Scan terminé : ${threats.length} menace(s) trouvée(s)`);
+      return JSON.stringify(result);
+    }
+
+    // ─── Services Windows ────────────────────────────���───────────────────────
+    case 'list_services': {
+      const psCode = [
+        '$OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)',
+        'try {',
+        '  $svcs = Get-WmiObject Win32_Service |',
+        '    Select-Object Name,DisplayName,State,StartMode |',
+        '    Sort-Object DisplayName',
+        '  if ($svcs) { $svcs | ConvertTo-Json -Compress -Depth 2 } else { "[]" }',
+        '} catch { "[]" }',
+      ].join('\n');
+      const encoded = Buffer.from(psCode, 'utf16le').toString('base64');
+      const out = execSync(
+        `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ${encoded}`,
+        { encoding: 'utf8', timeout: 30_000 }
+      );
+      const lines = out.split('\n').map(l => l.trim()).filter(Boolean);
+      let json = '';
+      for (const line of lines) {
+        if (line.startsWith('[') || line.startsWith('{')) { json = line; break; }
+      }
+      if (!json) throw new Error('Aucune sortie JSON de Get-WmiObject Win32_Service');
+      const arr = JSON.parse(json);
+      return JSON.stringify(Array.isArray(arr) ? arr : [arr]);
+    }
+
+    case 'service_action': {
+      const svcName = params.service_name;
+      const action  = (params.action || '').toLowerCase();
+      if (!svcName) throw new Error('Paramètre manquant : service_name');
+      if (!['start','stop','restart'].includes(action))
+        throw new Error(`Action invalide : ${action} (start|stop|restart)`);
+
+      const escaped = svcName.replace(/'/g, "''");
+      const psCmd = action === 'start'
+        ? `Start-Service -Name '${escaped}' -ErrorAction Stop`
+        : action === 'stop'
+          ? `Stop-Service -Name '${escaped}' -Force -ErrorAction Stop`
+          : `Restart-Service -Name '${escaped}' -Force -ErrorAction Stop`;
+
+      execSync(`powershell -NoProfile -Command "${psCmd}"`, { encoding: 'utf8', timeout: 60_000 });
+
+      const newStatus = execSync(
+        `powershell -NoProfile -Command "(Get-Service '${escaped}').Status.ToString()"`,
+        { encoding: 'utf8', timeout: 5_000 }
+      ).trim();
+
+      return JSON.stringify({
+        action,
+        service_name: svcName,
+        new_status:   newStatus,
+        message:      `✅ ${svcName} : ${action} exécuté. Statut : ${newStatus}`,
+      });
+    }
+
+    case 'service_startup': {
+      const svcName     = params.service_name;
+      const startupType = params.startup_type;
+      if (!svcName || !startupType)
+        throw new Error('Paramètres manquants : service_name, startup_type');
+      if (!['Automatic','Manual','Disabled'].includes(startupType))
+        throw new Error(`Type invalide : ${startupType} (Automatic|Manual|Disabled)`);
+
+      const escaped = svcName.replace(/'/g, "''");
+      execSync(
+        `powershell -NoProfile -Command "Set-Service -Name '${escaped}' -StartupType ${startupType}"`,
+        { encoding: 'utf8', timeout: 15_000 }
+      );
+      return JSON.stringify({
+        service_name:  svcName,
+        startup_type:  startupType,
+        message:       `✅ Démarrage de "${svcName}" changé en ${startupType}.`,
+      });
     }
 
     default:
@@ -647,9 +1295,17 @@ async function checkForUpdate() {
     fs.writeFileSync(path.resolve(__filename), content, 'utf8');
 
     console.log('   ✅ Fichier mis à jour. Redémarrage...');
-    const { spawn } = require('child_process');
-    spawn(process.execPath, [path.resolve(__filename)], { detached: true, stdio: 'inherit' }).unref();
-    setTimeout(() => process.exit(0), 500);
+    // Sur Windows : start /b lance un nouveau process indépendant du terminal courant
+    const { exec } = require('child_process');
+    const scriptPath = path.resolve(__filename);
+    exec(`start "" /b "${process.execPath}" "${scriptPath}"`, { shell: 'cmd.exe', windowsHide: true }, (err) => {
+      if (err) {
+        // Fallback : spawn détaché sans héritage stdio
+        const { spawn } = require('child_process');
+        spawn(process.execPath, [scriptPath], { detached: true, stdio: 'ignore' }).unref();
+      }
+    });
+    setTimeout(() => process.exit(0), 1500);
   } catch (e) {
     // Silencieux : pas de mise à jour si GitHub injoignable
   }
