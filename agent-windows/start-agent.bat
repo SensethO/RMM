@@ -21,7 +21,6 @@ echo [%DATE% %TIME%] Agent arrete (code: %EXIT_CODE%).
 if %EXIT_CODE% EQU 0 (
     echo Arret volontaire - pas de redemarrage.
     echo [%DATE% %TIME%] Arret volontaire. >> "%LOGFILE%"
-    pause
     exit /b 0
 )
 echo Redemarrage dans 10 secondes... (Ctrl+C pour annuler)
