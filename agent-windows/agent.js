@@ -272,7 +272,14 @@ async function registerDevice() {
 
   const res = await request('POST', '/api/devices/register', deviceInfo);
 
-  if (res.status === 201 && res.data.data) {
+  // Handle successful registration (200 or 201)
+  if ((res.status === 200 || res.status === 201) && res.data && res.data.id) {
+    deviceDbId = res.data.id;
+    console.log(`✅ Device enregistré ! UUID: ${deviceDbId}`);
+    return true;
+  }
+
+  if ((res.status === 200 || res.status === 201) && res.data && res.data.data && res.data.data.id) {
     deviceDbId = res.data.data.id;
     console.log(`✅ Device enregistré ! UUID: ${deviceDbId}`);
     return true;
