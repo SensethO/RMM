@@ -48,7 +48,7 @@ if ($AgentScript -and (Test-Path $AgentScript)) {
     else                     { $script:AGENT_SCRIPT = "" }
 }
 
-$script:DATA_DIR = Join-Path $env:ProgramData "RMM"
+$script:DATA_DIR = Join-Path $env:APPDATA "RMM"
 $script:LOG_FILE = Join-Path $script:DATA_DIR "agent.log"
 $script:PID_FILE = Join-Path $script:DATA_DIR "agent.pid"
 
